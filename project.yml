@@ -32,7 +32,7 @@ targets:
         CFBundleVersion: "1"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.roundbytes.Setlist
+        PRODUCT_BUNDLE_IDENTIFIER: com.roundbytes.setlist
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Setlist/Setlist.entitlements
         SWIFT_VERSION: "6.0"
