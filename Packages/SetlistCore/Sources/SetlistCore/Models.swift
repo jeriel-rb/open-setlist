@@ -49,7 +49,12 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum JobKind: String, Codable, Sendable {
-    case pasteList, youtubeSet
+    /// Free-form pasted text.
+    case pasteList
+    /// Pasted YouTube / SoundCloud / Spotify links.
+    case link
+    /// A single YouTube mix identified track by track.
+    case youtubeSet
 }
 
 public struct Job: Codable, Equatable, Identifiable, Sendable {
