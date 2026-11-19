@@ -95,6 +95,22 @@ final class ToolsTests: XCTestCase {
         XCTAssertNotEqual(result?.exitCode, 0)
     }
 
+    func testProcessRunnerKillsSilentProcessAfterIdleTimeout() async throws {
+        let runner = ProcessRunner(idleTimeout: 0.5)
+        let started = Date()
+        let result = try await runner.run(URL(fileURLWithPath: "/bin/sleep"), arguments: ["10"], onLine: nil)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertNotEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stderr.contains("no output for"), result.stderr)
+    }
+
+    func testProcessRunnerIdleTimeoutResetsOnOutput() async throws {
+        let runner = ProcessRunner(idleTimeout: 0.8)
+        let result = try await runner.run(URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "for i in 1 2 3 4; do echo tick; sleep 0.4; done; echo done"], onLine: nil)
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertTrue(result.stdout.hasSuffix("done\n"))
+    }
+
     func testProcessRunnerSplitsCarriageReturnProgress() async throws {
         let runner = ProcessRunner()
         let collected = LineCollector()

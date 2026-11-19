@@ -26,6 +26,7 @@ final class DownloaderTests: XCTestCase {
         XCTAssertEqual(args, [
             "--no-playlist", "--extract-audio", "--audio-format", "mp3", "--audio-quality", "192K",
             "--embed-thumbnail", "--embed-metadata", "--no-overwrites", "--newline", "--progress",
+            "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
             "--ffmpeg-location", "/tools", "--print", "after_move:filepath",
             "-o", "/out/01 - x.%(ext)s", "https://www.youtube.com/watch?v=a&list=PL1",
         ])

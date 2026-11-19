@@ -79,7 +79,12 @@ public protocol CommandRunning: Sendable {
 }
 
 public struct ProcessRunner: CommandRunning {
-    public init() {}
+    /// Kill the child when it produces no output for this long. nil disables the watchdog.
+    public let idleTimeout: TimeInterval?
+
+    public init(idleTimeout: TimeInterval? = nil) {
+        self.idleTimeout = idleTimeout
+    }
 
     public func run(_ executable: URL, arguments: [String], onLine: (@Sendable (String) -> Void)?) async throws -> CommandResult {
         let process = Process()
@@ -97,12 +102,30 @@ public struct ProcessRunner: CommandRunning {
 
         let stdout = OutputAccumulator(onLine: onLine)
         let stderr = OutputAccumulator(onLine: nil)
+        let watchdog = Watchdog()
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            watchdog.touch()
             stdout.append(handle.availableData)
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            watchdog.touch()
             stderr.append(handle.availableData)
         }
+
+        var watchdogTask: Task<Void, Never>?
+        if let idleTimeout {
+            watchdogTask = Task.detached {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(100))
+                    if watchdog.idleSeconds > idleTimeout, process.isRunning {
+                        watchdog.markTimedOut()
+                        process.terminate()
+                        return
+                    }
+                }
+            }
+        }
+        defer { watchdogTask?.cancel() }
 
         let exitCode: Int32 = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -127,8 +150,24 @@ public struct ProcessRunner: CommandRunning {
         stderr.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
         stdout.finish()
 
-        return CommandResult(exitCode: exitCode, stdout: stdout.text, stderr: stderr.text)
+        var stderrText = stderr.text
+        if watchdog.timedOut, let idleTimeout {
+            stderrText += "\nStopped: no output for \(Int(idleTimeout)) seconds."
+        }
+        return CommandResult(exitCode: exitCode, stdout: stdout.text, stderr: stderrText)
     }
+}
+
+/// Tracks when a process last produced output.
+private final class Watchdog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date()
+    private var flagged = false
+
+    func touch() { lock.withLock { last = Date() } }
+    var idleSeconds: TimeInterval { lock.withLock { Date().timeIntervalSince(last) } }
+    func markTimedOut() { lock.withLock { flagged = true } }
+    var timedOut: Bool { lock.withLock { flagged } }
 }
 
 /// Collects raw bytes and emits complete lines.

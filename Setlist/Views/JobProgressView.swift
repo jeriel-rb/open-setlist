@@ -34,6 +34,13 @@ struct JobProgressView: View {
                         Label("Stop", systemImage: "stop.fill")
                     }
                     .help("Stop downloading. Finished files are kept.")
+                } else if job.retryableCount > 0 {
+                    Button {
+                        model.retry(job)
+                    } label: {
+                        Label("Retry \(job.retryableCount)", systemImage: "arrow.clockwise")
+                    }
+                    .help("Download the failed and cancelled tracks again.")
                 }
                 Button {
                     model.revealInFinder(job)

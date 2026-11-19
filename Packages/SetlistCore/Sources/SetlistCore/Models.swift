@@ -107,3 +107,35 @@ public struct Job: Codable, Equatable, Identifiable, Sendable {
         self.tracks = tracks
     }
 }
+
+
+public extension Job {
+    static let interruptedNote = "Interrupted when the app quit"
+
+    var hasActiveTracks: Bool { tracks.contains { $0.status.isActive } }
+
+    /// Tracks that a retry would run again.
+    var retryableCount: Int { tracks.filter { $0.status == .failed || $0.status == .cancelled }.count }
+
+    /// A job loaded from disk with tracks still "in progress" was cut off; mark those tracks cancelled.
+    func markingInterrupted() -> Job {
+        var copy = self
+        for i in copy.tracks.indices where copy.tracks[i].status.isActive {
+            copy.tracks[i].status = .cancelled
+            copy.tracks[i].activity = nil
+            copy.tracks[i].note = Self.interruptedNote
+        }
+        return copy
+    }
+
+    /// Failed and cancelled tracks go back to pending so `Downloader.downloadAll` picks them up again.
+    func resettingForRetry() -> Job {
+        var copy = self
+        for i in copy.tracks.indices where copy.tracks[i].status == .failed || copy.tracks[i].status == .cancelled {
+            copy.tracks[i].status = .pending
+            copy.tracks[i].note = nil
+            copy.tracks[i].activity = nil
+        }
+        return copy
+    }
+}

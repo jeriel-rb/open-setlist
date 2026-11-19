@@ -61,6 +61,7 @@ public struct Downloader: Sendable {
             "--extract-audio", "--audio-format", "mp3", "--audio-quality", quality,
             "--embed-thumbnail", "--embed-metadata",
             "--no-overwrites", "--newline", "--progress",
+            "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
             "--ffmpeg-location", ffmpeg.deletingLastPathComponent().path,
             "--print", "after_move:filepath",
             "-o", outputTemplate,

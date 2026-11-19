@@ -54,7 +54,10 @@ final class AppModel {
         static let keepOriginalMix = "keepOriginalMix"
     }
 
-    init(defaults: UserDefaults = .standard, runner: any CommandRunning = ProcessRunner(), locator: ToolLocator = .standard()) {
+    /// yt-dlp is killed if it prints nothing for this long, so one dead connection cannot hang a job.
+    static let idleTimeout: TimeInterval = 180
+
+    init(defaults: UserDefaults = .standard, runner: any CommandRunning = ProcessRunner(idleTimeout: AppModel.idleTimeout), locator: ToolLocator = .standard()) {
         self.defaults = defaults
         self.runner = runner
         self.locator = locator
@@ -150,24 +153,7 @@ final class AppModel {
         }
         jobs.insert(job, at: 0)
         selection = .job(job.id)
-        isWorking = true
-        let downloader = downloader
-        let store = store
-        let snapshot = job
-        let jobID = job.id
-        runningTasks[jobID] = Task {
-            var finished = await downloader.downloadAll(job: snapshot, store: store) { track in
-                Task { @MainActor [weak self] in self?.apply(track, to: jobID) }
-            }
-            // The user may have renamed the job while it ran; keep the latest name and move the folder now.
-            if let current = jobs.first(where: { $0.id == jobID }), current.name != finished.name {
-                finished.name = current.name
-            }
-            try? store.syncDirectory(&finished)
-            replace(finished)
-            runningTasks[jobID] = nil
-            isWorking = !runningTasks.isEmpty
-        }
+        resume(job)
     }
 
     /// Stops a running job. Tracks not yet finished are marked cancelled; finished files stay.
@@ -193,9 +179,44 @@ final class AppModel {
 
     func reloadJobs() {
         do {
-            jobs = try store.loadAll()
+            var loaded = try store.loadAll()
+            // Jobs still marked "in progress" on disk were cut off by a quit or crash; nothing is running them now.
+            for i in loaded.indices where loaded[i].hasActiveTracks && runningTasks[loaded[i].id] == nil {
+                loaded[i] = loaded[i].markingInterrupted()
+                try? store.save(loaded[i])
+            }
+            jobs = loaded
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Re-runs the failed and cancelled tracks of a job.
+    func retry(_ job: Job) {
+        guard !isRunning(job), job.retryableCount > 0,
+              let i = jobs.firstIndex(where: { $0.id == job.id }) else { return }
+        let reset = job.resettingForRetry()
+        jobs[i] = reset
+        resume(reset)
+    }
+
+    /// Like `run`, for a job that already exists in `jobs` and on disk.
+    private func resume(_ job: Job) {
+        isWorking = true
+        let downloader = downloader
+        let store = store
+        let jobID = job.id
+        runningTasks[jobID] = Task {
+            var finished = await downloader.downloadAll(job: job, store: store) { track in
+                Task { @MainActor [weak self] in self?.apply(track, to: jobID) }
+            }
+            if let current = jobs.first(where: { $0.id == jobID }), current.name != finished.name {
+                finished.name = current.name
+            }
+            try? store.syncDirectory(&finished)
+            replace(finished)
+            runningTasks[jobID] = nil
+            isWorking = !runningTasks.isEmpty
         }
     }
 
