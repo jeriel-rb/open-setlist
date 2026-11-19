@@ -5,6 +5,7 @@ struct JobProgressView: View {
     @Environment(AppModel.self) private var model
     let job: Job
     @State private var title = ""
+    @State private var titleHovered = false
     @FocusState private var titleFocused: Bool
 
     private var done: Int { job.tracks.filter { $0.status == .done }.count }
@@ -21,10 +22,30 @@ struct JobProgressView: View {
                         .textFieldStyle(.plain)
                         .font(.title2.weight(.semibold))
                         .focused($titleFocused)
-                        .onSubmit { commitTitle() }
+                        .onSubmit { titleFocused = false }
+                        .onExitCommand {
+                            title = job.name
+                            titleFocused = false
+                        }
                         .onChange(of: titleFocused) { _, focused in if !focused { commitTitle() } }
-                        .help("Click to rename. The folder is renamed too.")
-                    Text(summary).foregroundStyle(.secondary)
+                        .padding(.horizontal, Self.titleInset)
+                        .padding(.vertical, 3)
+                        .background(titleFocused ? Color(nsColor: .textBackgroundColor) : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .overlay {
+                            // The outline is what tells you the title is a field: faint on hover, accent while editing.
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(titleFocused ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
+                                              lineWidth: titleFocused ? 2 : 1)
+                                .opacity(titleFocused || titleHovered ? 1 : 0)
+                        }
+                        .onHover { titleHovered = $0 }
+                        // Pull the field left so its text stays in line with everything below it.
+                        .padding(.leading, -Self.titleInset)
+                        .help("Click to rename. The folder is renamed too. Return saves, Esc cancels.")
+                    Text(summary)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                 }
                 Spacer()
                 if running {
@@ -102,23 +123,29 @@ struct JobProgressView: View {
             .tableStyle(.inset(alternatesRowBackgrounds: true))
         }
         .padding(20)
+        // A text field keeps focus when you click bare window background, so end the edit here.
+        .contentShape(Rectangle())
+        .onTapGesture { titleFocused = false }
         .navigationTitle(job.name)
         .onAppear { title = job.name }
-        .onChange(of: job.id) { _, _ in title = job.name }
         .onChange(of: job.name) { _, new in if !titleFocused { title = new } }
     }
 
+    private static let titleInset: CGFloat = 6
+
+    /// Saves the typed title. An empty one is not a name, so the old one comes back.
     private func commitTitle() {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { title = job.name; return }
-        if trimmed != job.name { model.rename(job, to: trimmed) }
+        if !trimmed.isEmpty, trimmed != job.name { model.rename(job, to: trimmed) }
+        // The store may have adjusted the name, or refused it.
+        title = model.job(id: job.id)?.name ?? job.name
     }
 
     private var summary: String {
         var parts = ["\(done) of \(job.tracks.count) downloaded"]
         if failed > 0 { parts.append("\(failed) failed") }
         if cancelled > 0 { parts.append("\(cancelled) cancelled") }
-        if let dir = model.directory(of: job) { parts.append(dir.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")) }
+        if let dir = model.directory(of: job) { parts.append(dir.tildePath) }
         return parts.joined(separator: " · ")
     }
 }

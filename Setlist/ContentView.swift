@@ -16,16 +16,19 @@ struct ContentView: View {
             case .link:
                 LinkView()
             case .youtubeSet:
-                YouTubeSetPlaceholderView()
+                YouTubeSetView()
             case let .job(id):
                 if let job = model.job(id: id) {
+                    // One view per job, so a half-typed title never carries over to the next job you open.
                     JobProgressView(job: job)
+                        .id(job.id)
                 } else {
                     ContentUnavailableView("Job not found", systemImage: "questionmark.folder")
                 }
             }
         }
         .frame(minWidth: 820, minHeight: 520)
+        .onAppear { model.applyAppearance() }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -34,13 +37,5 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
-    }
-}
-
-/// Replaced by the real YouTube Set flow in a later task.
-struct YouTubeSetPlaceholderView: View {
-    var body: some View {
-        ContentUnavailableView("YouTube Set", systemImage: "waveform.badge.magnifyingglass",
-                               description: Text("Identify every song in a mix and download them. Coming next."))
     }
 }

@@ -7,26 +7,12 @@ struct LinkView: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
-            Text("Paste links")
-                .font(.title2.weight(.semibold))
-            Text("YouTube, SoundCloud or Spotify. One link per line. Playlists and Spotify albums are expanded. Spotify songs are matched on YouTube, since Spotify serves no audio.")
-                .foregroundStyle(.secondary)
+            DraftHeader(title: "Paste links",
+                        detail: "YouTube, SoundCloud or Spotify. One link per line. Playlists and Spotify albums are expanded. Spotify songs are matched on YouTube, since Spotify serves no audio.")
 
-            TextEditor(text: $model.linkText)
-                .font(.body.monospaced())
+            PlaceholderTextEditor(text: $model.linkText,
+                                  placeholder: "https://open.spotify.com/track/…\nhttps://youtu.be/…\nhttps://soundcloud.com/…")
                 .frame(minHeight: 120)
-                .overlay(alignment: .topLeading) {
-                    if model.linkText.isEmpty {
-                        Text("https://open.spotify.com/track/…\nhttps://youtu.be/…\nhttps://soundcloud.com/…")
-                            .foregroundStyle(.tertiary)
-                            .font(.body.monospaced())
-                            .padding(.top, 8)
-                            .padding(.leading, 5)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
 
             HStack {
                 Button {
@@ -39,7 +25,8 @@ struct LinkView: View {
                     }
                 }
                 .disabled(model.isResolvingLinks || model.linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .keyboardShortcut(.return, modifiers: .command)
+                // Once the songs are listed, ⌘↩ belongs to Download.
+                .keyboardShortcut(model.linkTracks.isEmpty ? KeyboardShortcut(.return, modifiers: .command) : nil)
                 Text("Looks up each link and lists the songs it contains.")
                     .foregroundStyle(.secondary)
                     .font(.callout)
@@ -60,20 +47,12 @@ struct LinkView: View {
             if !model.linkTracks.isEmpty {
                 TrackTableView(tracks: $model.linkTracks, detailed: false)
                     .frame(minHeight: 200)
-                HStack {
-                    Text("Folder name")
-                    TextField(AppModel.defaultName("Links"), text: $model.linkName)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: 300)
-                    Spacer()
-                    Button("Download \(model.linkTracks.count) tracks") {
-                        model.startLinkJob()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.isWorking)
+                DownloadBar(namePlaceholder: AppModel.defaultName("Links"), name: $model.linkName,
+                            count: model.linkTracks.count) {
+                    model.startLinkJob()
                 }
             } else {
-                Spacer()
+                Spacer(minLength: 0)
             }
         }
         .padding(20)

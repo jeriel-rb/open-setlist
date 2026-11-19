@@ -106,7 +106,7 @@ struct ConfidenceBadge: View {
         case .high: "High"
         case .medium: "Original only"
         case .low: "Not found"
-        case .fromText: "From description"
+        case .fromText: "Posted tracklist"
         }
     }
 
