@@ -33,6 +33,10 @@ struct ContentView: View {
         }
         .frame(minWidth: 820, minHeight: 520)
         .onAppear { model.applyAppearance() }
+        // Coming back from Finder: pick up folders that were renamed, moved or deleted meanwhile.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            model.reloadJobs()
+        }
         .alert("Something went wrong", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }

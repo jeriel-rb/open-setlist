@@ -104,8 +104,17 @@ public struct JobStore: Sendable {
     public func loadAll() throws -> [Job] {
         guard FileManager.default.fileExists(atPath: root.path) else { return [] }
         let dirs = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
-        return dirs.compactMap { try? load(from: $0) }
-            .sorted { $0.createdAt > $1.createdAt }
+        return dirs.compactMap { dir -> Job? in
+            guard var job = try? load(from: dir) else { return nil }
+            // The folder may have been renamed in Finder: where the job actually is wins over what it
+            // remembers, and the job takes the folder's new name.
+            if job.directoryName != dir.lastPathComponent {
+                job.directoryName = dir.lastPathComponent
+                job.name = dir.lastPathComponent
+            }
+            return job
+        }
+        .sorted { $0.createdAt > $1.createdAt }
     }
 
     private func load(from dir: URL) throws -> Job {

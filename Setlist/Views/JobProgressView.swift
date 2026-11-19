@@ -122,6 +122,9 @@ struct JobProgressView: View {
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        } else if track.status == .done, model.file(of: track, in: job) == nil {
+                            Text("The file is no longer in the folder (deleted, moved or renamed outside the app).")
+                                .font(.caption).foregroundStyle(.orange).lineLimit(1)
                         } else if let note = track.note, !note.isEmpty {
                             Text(note).font(.caption).foregroundStyle(track.status == .failed ? .red : .secondary).lineLimit(1)
                         }

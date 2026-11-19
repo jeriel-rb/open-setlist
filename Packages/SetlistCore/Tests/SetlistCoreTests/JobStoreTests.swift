@@ -83,6 +83,22 @@ final class JobStoreTests: XCTestCase {
         XCTAssertEqual(loaded[0].directoryName, "newer")
     }
 
+    func testFolderRenamedInFinderIsFollowed() throws {
+        var job = Job(name: "set", kind: .pasteList, tracks: [])
+        _ = try store.directory(for: &job)
+        try store.save(job)
+        try FileManager.default.moveItem(at: root.appendingPathComponent("set"), to: root.appendingPathComponent("renamed in finder"))
+
+        var loaded = try XCTUnwrap(try store.loadAll().first)
+        XCTAssertEqual(loaded.directoryName, "renamed in finder")
+        XCTAssertEqual(loaded.name, "renamed in finder")
+        // Saving must not bring the old folder back as a second copy of the job.
+        loaded.tracks.append(Track(index: 1, query: "A - B"))
+        try store.save(loaded)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("set").path))
+        XCTAssertEqual(try store.loadAll().count, 1)
+    }
+
     func testLoadAllIgnoresFoldersWithoutJobFile() throws {
         try FileManager.default.createDirectory(at: root.appendingPathComponent("random"), withIntermediateDirectories: true)
         XCTAssertEqual(try store.loadAll(), [])

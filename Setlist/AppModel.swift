@@ -541,6 +541,8 @@ final class AppModel {
                 }
             }
             jobs = loaded
+            // The open job's folder may have been deleted or moved away.
+            if case let .job(id) = selection, !loaded.contains(where: { $0.id == id }) { selection = .text }
         } catch {
             errorMessage = error.localizedDescription
         }
