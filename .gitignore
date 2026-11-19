@@ -1,0 +1,10 @@
+build/
+*.xcodeproj
+Local.xcconfig
+bin/*
+!bin/.gitkeep
+.DS_Store
+.swiftpm
+.build/
+Packages/SetlistCore/.build/
+*.dmg

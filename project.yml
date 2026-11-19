@@ -1,0 +1,41 @@
+name: Setlist
+options:
+  bundleIdPrefix: com.roundbytes
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Local.xcconfig
+  Release: Local.xcconfig
+packages:
+  SetlistCore:
+    path: Packages/SetlistCore
+targets:
+  Setlist:
+    type: application
+    platform: macOS
+    sources:
+      - path: Setlist
+      - path: bin
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: SetlistCore
+      - sdk: ShazamKit.framework
+    info:
+      path: Setlist/Info.plist
+      properties:
+        LSMinimumSystemVersion: "14.0"
+        LSApplicationCategoryType: public.app-category.music
+        NSAppleMusicUsageDescription: Setlist uses ShazamKit to identify songs in a mix.
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.roundbytes.Setlist
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Setlist/Setlist.entitlements
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_STYLE: Automatic
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
