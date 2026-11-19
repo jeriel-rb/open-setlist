@@ -62,6 +62,8 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
     /// For a track given as a link: the song as "Artist - Title", taken from the downloaded file's name
     /// the first time the files are renamed, so later renames do not have to guess it again.
     public var songName: String?
+    /// The page the audio was downloaded from (the YouTube or SoundCloud address).
+    public var sourceURL: String?
 
     public init(index: Int, query: String, start: Double? = nil, confidence: Confidence = .high) {
         self.id = UUID()

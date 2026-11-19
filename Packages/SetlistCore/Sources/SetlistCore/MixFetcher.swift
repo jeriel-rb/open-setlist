@@ -64,7 +64,7 @@ public struct MixFetcher: Sendable {
         let ytDlp = try locator.url(for: .ytDlp)
         let result = try await runner.run(ytDlp, arguments: Self.infoArguments(url: url), onLine: nil)
         guard result.exitCode == 0 else {
-            throw ToolError.failed(.ytDlp, exitCode: result.exitCode, stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw ToolError.failed(.ytDlp, exitCode: result.exitCode, stderr: DownloadFailure.describe(result.stderr))
         }
         return try Self.parseInfo(Data(result.stdout.utf8))
     }
@@ -86,7 +86,7 @@ public struct MixFetcher: Sendable {
         try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
         let result = try await runner.run(ytDlp, arguments: Self.audioArguments(url: url, output: output, ffmpeg: ffmpeg), onLine: onLine)
         guard result.exitCode == 0 else {
-            throw ToolError.failed(.ytDlp, exitCode: result.exitCode, stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw ToolError.failed(.ytDlp, exitCode: result.exitCode, stderr: DownloadFailure.describe(result.stderr))
         }
     }
 }

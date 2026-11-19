@@ -54,6 +54,8 @@ struct DownloadBar: View {
     @Binding var name: String
     /// Tracks the button will download.
     let count: Int
+    /// Rows that will be left out because of a problem.
+    var skipped = 0
     /// True when at least one track is a song name that has to be searched for, not a direct link.
     var searches = true
     let action: () -> Void
@@ -74,6 +76,12 @@ struct DownloadBar: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 300)
             Spacer()
+            if skipped > 0 {
+                Label(skipped == 1 ? "1 line will be skipped" : "\(skipped) lines will be skipped", systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .help("Lines marked with a warning in the list are not downloaded. Hover over the mark to see why.")
+            }
             Button(buttonTitle, action: action)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: .command)

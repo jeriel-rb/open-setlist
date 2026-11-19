@@ -265,7 +265,7 @@ public struct SetRunner: Sendable {
         publish()
         // The index may have moved since the track was queued; download under the current one.
         let current = state.value.tracks.first { $0.id == track.id } ?? track
-        let result = await downloader.download(track: current, into: dir) { text in
+        let result = await downloader.fetch(track: current, into: dir) { text in
             let changed = state.mutate { job -> Bool in
                 guard let i = job.tracks.firstIndex(where: { $0.id == track.id }), job.tracks[i].activity != text else { return false }
                 job.tracks[i].activity = text
@@ -277,9 +277,11 @@ public struct SetRunner: Sendable {
             if changed { publish() }
         }
         switch result {
-        case let .success(url):
+        case let .success(downloaded):
+            let url = downloaded.file
             update {
                 $0.outputPath = url.path
+                if let source = downloaded.source { $0.sourceURL = source }
                 if downloader.analyzer != nil {
                     $0.status = .analyzing
                     $0.activity = "Analysing BPM and key"

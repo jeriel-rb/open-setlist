@@ -69,14 +69,25 @@ public struct Downloader: Sendable {
             "--no-overwrites", "--newline", "--progress",
             "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
             "--ffmpeg-location", ffmpeg.deletingLastPathComponent().path,
-            "--print", "after_move:filepath",
+            "--print", "after_move:webpage_url", "--print", "after_move:filepath",
             "-o", outputTemplate,
             target,
         ]
     }
 
+    /// A finished download: the MP3 and the page its audio came from.
+    public struct Downloaded: Equatable, Sendable {
+        public let file: URL
+        public let source: String?
+    }
+
     /// Downloads one track into `dir`. Returns the final MP3 path. `onActivity` receives progress text.
     public func download(track: Track, into dir: URL, onActivity: (@Sendable (String) -> Void)? = nil) async -> Result<URL, DownloadError> {
+        await fetch(track: track, into: dir, onActivity: onActivity).map(\.file)
+    }
+
+    /// Like `download`, also reporting where the audio was found.
+    public func fetch(track: Track, into dir: URL, onActivity: (@Sendable (String) -> Void)? = nil) async -> Result<Downloaded, DownloadError> {
         let ytDlp: URL, ffmpeg: URL
         do {
             ytDlp = try locator.url(for: .ytDlp)
@@ -99,10 +110,12 @@ public struct Downloader: Sendable {
                     if let text = Self.activity(for: line) { onActivity?(text) }
                 }
                 if Task.isCancelled { return .failure(.cancelled) }
-                if result.exitCode == 0,
-                   let path = result.stdout.split(separator: "\n").map(String.init)
-                       .last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-                    return .success(URL(fileURLWithPath: path))
+                // yt-dlp prints the page address, then the file path, once the file is in place.
+                let printed = result.stdout.split(separator: "\n").map(String.init)
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                if result.exitCode == 0, let path = printed.last {
+                    let source = printed.dropLast().last(where: TrackParser.isURL)
+                    return .success(Downloaded(file: URL(fileURLWithPath: path), source: source))
                 }
                 lastStderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             } catch {
@@ -149,12 +162,14 @@ public struct Downloader: Sendable {
                     }
                     state.set(track.id, status: .searching, path: nil, note: nil)
                     onUpdate(state.track(track.id))
-                    let result = await download(track: track, into: dir) { text in
+                    let result = await fetch(track: track, into: dir) { text in
                         // Synchronous so progress text is applied and reported in arrival order.
                         if let updated = state.setActivity(track.id, text) { onUpdate(updated) }
                     }
                     switch result {
-                    case let .success(url):
+                    case let .success(downloaded):
+                        let url = downloaded.file
+                        state.setSource(track.id, downloaded.source)
                         if let analyzer {
                             state.set(track.id, status: .analyzing, path: url.path, note: nil, activity: "Analysing BPM and key")
                             onUpdate(state.track(track.id))
@@ -192,7 +207,7 @@ public struct Downloader: Sendable {
 
     static func describe(_ error: DownloadError) -> String {
         switch error {
-        case let .allSourcesFailed(stderr): return stderr.isEmpty ? "not found" : stderr
+        case let .allSourcesFailed(stderr): return DownloadFailure.describe(stderr)
         case let .tool(toolError): return toolError.localizedDescription
         case .cancelled: return "cancelled"
         }
@@ -230,6 +245,13 @@ private final class JobState: @unchecked Sendable {
                 _job.tracks[i].status = .downloading
             }
             return _job.tracks[i]
+        }
+    }
+
+    func setSource(_ id: UUID, _ source: String?) {
+        lock.withLock {
+            guard let i = _job.tracks.firstIndex(where: { $0.id == id }), let source else { return }
+            _job.tracks[i].sourceURL = source
         }
     }
 

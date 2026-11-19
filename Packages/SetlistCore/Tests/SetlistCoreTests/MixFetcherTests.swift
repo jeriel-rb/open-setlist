@@ -64,7 +64,7 @@ final class MixFetcherTests: XCTestCase {
             _ = try await fetcher.fetchInfo(url: url)
             XCTFail("expected throw")
         } catch let error as ToolError {
-            XCTAssertEqual(error, .failed(.ytDlp, exitCode: 1, stderr: "Video unavailable"))
+            XCTAssertEqual(error, .failed(.ytDlp, exitCode: 1, stderr: "This video is no longer available."))
         }
     }
 

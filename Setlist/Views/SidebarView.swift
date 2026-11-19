@@ -3,6 +3,7 @@ import SetlistCore
 
 struct SidebarView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     /// The history row being renamed in place.
     @State private var renamingID: UUID?
     @State private var jobToTrash: Job?
@@ -47,15 +48,25 @@ struct SidebarView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 Divider()
-                SettingsLink {
-                    Label("Settings", systemImage: "gearshape")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                HStack {
+                    SettingsLink {
+                        Label("Settings", systemImage: "gearshape")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .help("Theme, file names, download folder and more (⌘,)")
+                    Button {
+                        openWindow(id: HelpCommands.windowID)
+                    } label: {
+                        Label("Help", systemImage: "questionmark.circle")
+                            .labelStyle(.iconOnly)
+                            .contentShape(Rectangle())
+                    }
+                    .help("What the screens, marks and tags mean (⌘?)")
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .help("Theme, file names, download folder and more (⌘,)")
             }
         }
         .onDeleteCommand {

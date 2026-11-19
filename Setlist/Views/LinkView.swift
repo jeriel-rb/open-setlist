@@ -4,33 +4,30 @@ import SetlistCore
 struct LinkView: View {
     @Environment(AppModel.self) private var model
 
+    private var status: String {
+        if model.isResolvingLinks { return "Looking up your links…" }
+        switch model.linkTracks.count {
+        case 0: return "The songs in your links are listed here."
+        case 1: return "1 track found. Fix any line below before downloading."
+        default: return "\(model.linkTracks.count) tracks found. Fix any line below before downloading."
+        }
+    }
+
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
             DraftHeader(title: "Paste links",
-                        detail: "YouTube, SoundCloud or Spotify. One link per line. Playlists and Spotify albums are expanded. Spotify songs are matched on YouTube, since Spotify serves no audio.")
+                        detail: "YouTube, SoundCloud or Spotify. One link per line. Playlists and albums are opened up into their songs. Spotify songs are found on YouTube, since Spotify serves no audio.")
 
             PlaceholderTextEditor(text: $model.linkText,
                                   placeholder: "https://open.spotify.com/track/…\nhttps://youtu.be/…\nhttps://soundcloud.com/…")
-                .frame(minHeight: 100)
+                .frame(minHeight: 110)
+                .onChange(of: model.linkText) { _, _ in model.linkTextChanged() }
 
-            HStack {
-                Button {
-                    Task { await model.resolveLinks() }
-                } label: {
-                    if model.isResolvingLinks {
-                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Checking links…") }
-                    } else {
-                        Text("Check links")
-                    }
-                }
-                .disabled(model.isResolvingLinks || model.linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                // Once the songs are listed, ⌘↩ belongs to Download.
-                .keyboardShortcut(model.linkTracks.isEmpty ? KeyboardShortcut(.return, modifiers: .command) : nil)
-                Text("Looks up each link and lists the songs it contains.")
+            HStack(spacing: 6) {
+                if model.isResolvingLinks { ProgressView().controlSize(.small) }
+                Text(status)
                     .foregroundStyle(.secondary)
-                    .font(.callout)
-                Spacer()
             }
 
             if !model.linkFailures.isEmpty {
@@ -47,7 +44,8 @@ struct LinkView: View {
             TrackTableView(tracks: $model.linkTracks, detailed: false)
                 .frame(minHeight: 160)
             DownloadBar(namePlaceholder: AppModel.defaultName("Links"), name: $model.linkName,
-                        count: model.linkTracks.filter { !$0.query.trimmingCharacters(in: .whitespaces).isEmpty }.count,
+                        count: model.readyTracks(model.linkTracks, in: .text).count,
+                        skipped: model.skippedCount(model.linkTracks, in: .text),
                         // Spotify links come back as song names, which are then searched for.
                         searches: model.linkTracks.contains { !TrackParser.isURL($0.query) }) {
                 model.startLinkJob()

@@ -22,7 +22,8 @@ struct PasteListView: View {
             TrackTableView(tracks: $model.draftTracks, detailed: false)
                 .frame(minHeight: 160)
             DownloadBar(namePlaceholder: AppModel.defaultName("Text"), name: $model.draftName,
-                        count: model.draftTracks.filter { !$0.query.trimmingCharacters(in: .whitespaces).isEmpty }.count,
+                        count: model.readyTracks(model.draftTracks, in: .text).count,
+                        skipped: model.skippedCount(model.draftTracks, in: .text),
                         searches: model.draftTracks.isEmpty || model.draftTracks.contains { !TrackParser.isURL($0.query) }) {
                 model.startPasteListJob()
             }

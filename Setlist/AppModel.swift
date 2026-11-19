@@ -190,11 +190,26 @@ final class AppModel {
         }
     }
 
-    /// The non-empty rows of a draft, renumbered from 1.
-    private func readyTracks(_ tracks: [Track]) -> [Track] {
-        var kept = tracks.filter { !$0.query.trimmingCharacters(in: .whitespaces).isEmpty }
+    /// The rows of a draft that can be downloaded, renumbered from 1: empty rows and rows with a
+    /// problem (too short to search, a broken link, a repeat of an earlier row) are left out.
+    func readyTracks(_ tracks: [Track], in context: DraftValidation.Context) -> [Track] {
+        let problems = DraftValidation.problems(in: tracks.map(\.query), context: context)
+        var kept = zip(tracks, problems)
+            .filter { !$0.query.trimmingCharacters(in: .whitespaces).isEmpty && $1 == nil }
+            .map(\.0)
         for i in kept.indices { kept[i].index = i + 1 }
         return kept
+    }
+
+    /// Rows that have something typed in them but will be skipped because of a problem.
+    func skippedCount(_ tracks: [Track], in context: DraftValidation.Context) -> Int {
+        DraftValidation.problems(in: tracks.map(\.query), context: context).compactMap { $0 }.count
+    }
+
+    /// An error in words meant for the person at the Mac: a failed tool's own explanation without the exit code.
+    private func message(for error: Error) -> String {
+        if case let ToolError.failed(_, _, detail) = error, !detail.isEmpty { return detail }
+        return error.localizedDescription
     }
 
     private func jobName(_ typed: String, fallback prefix: String) -> String {
@@ -203,7 +218,7 @@ final class AppModel {
     }
 
     func startPasteListJob() {
-        let tracks = readyTracks(draftTracks)
+        let tracks = readyTracks(draftTracks, in: .text)
         guard !tracks.isEmpty else { return }
         guard run(Job(name: jobName(draftName, fallback: "Text"), kind: .pasteList, tracks: tracks)) != nil else { return }
         draftText = ""
@@ -213,20 +228,81 @@ final class AppModel {
 
     // MARK: Link
 
-    /// Expands pasted links into tracks: playlists become their entries, Spotify becomes "Artist - Title".
-    func resolveLinks() async {
+    private var linkLookupTask: Task<Void, Never>?
+    /// What each pasted link turned out to contain, so editing the text does not look everything up again.
+    private var resolvedLinks: [String: [String]] = [:]
+
+    /// Call when the pasted links change. Shortly after the typing stops, every link is looked up:
+    /// playlists become their entries, Spotify becomes "Artist - Title". Lines that are not links are
+    /// reported instead of being searched for; song names belong in the Text tab.
+    func linkTextChanged() {
+        linkLookupTask?.cancel()
+        let lines = linkText.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !lines.isEmpty else {
+            linkTracks = []
+            linkFailures = []
+            isResolvingLinks = false
+            return
+        }
         isResolvingLinks = true
-        defer { isResolvingLinks = false }
+        linkLookupTask = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            await lookUp(lines)
+            guard !Task.isCancelled else { return }
+            isResolvingLinks = false
+        }
+    }
+
+    private func lookUp(_ lines: [String]) async {
         let resolver = LinkResolver(runner: runner, locator: locator)
-        let (queries, failures) = await resolver.resolveAll(linkText)
+        var failures: [String: String] = [:]
+        let checks = DraftValidation.problems(in: lines, context: .link)
+        let links = zip(lines, checks).filter { $1 == nil }.map(\.0)
+        var pending = Array(Set(links.filter { resolvedLinks[$0] == nil }))
+        // A few at a time, so a long paste does not open dozens of connections at once.
+        while !pending.isEmpty {
+            let batch = Array(pending.prefix(4))
+            pending.removeFirst(batch.count)
+            await withTaskGroup(of: (String, Result<[String], Error>).self) { group in
+                for link in batch {
+                    group.addTask {
+                        do { return (link, .success(try await resolver.resolve(link))) } catch { return (link, .failure(error)) }
+                    }
+                }
+                for await (link, result) in group {
+                    switch result {
+                    case let .success(queries): resolvedLinks[link] = queries
+                    case let .failure(error): failures[link] = message(for: error)
+                    }
+                }
+            }
+            if Task.isCancelled { return }
+        }
+
+        var queries: [String] = []
+        var problems: [String] = []
+        for (line, check) in zip(lines, checks) {
+            if let check {
+                problems.append("“\(line)”: \(check)")
+            } else if let resolved = resolvedLinks[line] {
+                queries += resolved
+            } else if let reason = failures[line] {
+                problems.append("“\(line)”: \(reason)")
+            }
+        }
         linkTracks = queries.enumerated().map { i, q in Track(index: i + 1, query: q) }
-        linkFailures = failures.map { "\($0.line): \($0.error)" }
+        linkFailures = problems
     }
 
     func startLinkJob() {
-        let tracks = readyTracks(linkTracks)
+        let tracks = readyTracks(linkTracks, in: .text)
         guard !tracks.isEmpty else { return }
         guard run(Job(name: jobName(linkName, fallback: "Links"), kind: .link, tracks: tracks)) != nil else { return }
+        linkLookupTask?.cancel()
+        isResolvingLinks = false
         linkText = ""
         linkTracks = []
         linkFailures = []
@@ -239,7 +315,7 @@ final class AppModel {
 
     /// Rows a download would fetch: "Not found" rows are skipped until the user types a title.
     var setDownloadableCount: Int {
-        readyTracks(setTracks).filter { $0.confidence != .low }.count
+        readyTracks(setTracks, in: .text).filter { $0.confidence != .low }.count
     }
 
     /// Looks up the mix at `setURL`. A tracklist posted in its description or comments is put on screen
@@ -248,8 +324,12 @@ final class AppModel {
     func startIdentify() {
         guard identifyTask == nil else { return }
         let text = setURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard TrackParser.isURL(text), let pasted = URL(string: text) else {
-            setError = "Paste the link of a YouTube mix first."
+        if let problem = DraftValidation.problem(withMixLink: text) {
+            setError = problem
+            return
+        }
+        guard let pasted = URL(string: text) else {
+            setError = "This link is incomplete."
             return
         }
         let url = MixFetcher.canonicalURL(pasted)
@@ -262,7 +342,7 @@ final class AppModel {
                 try await identify(url)
             } catch {
                 // A stopped look-up ends in a cancellation or a killed yt-dlp; neither is worth an error message.
-                if !Task.isCancelled { setError = error.localizedDescription }
+                if !Task.isCancelled { setError = message(for: error) }
             }
             setStage = nil
             identifyTask = nil
@@ -281,7 +361,20 @@ final class AppModel {
             return
         }
 
-        // No posted tracklist: Shazam has to listen. Find out now whether it will answer, not after the download.
+        // No posted tracklist: Shazam has to listen to the whole thing, so it has to be a finished recording that fits on the disk.
+        guard info.duration > 0 else {
+            setError = "This has no length yet, so it is probably a live stream. Try again once it has ended."
+            return
+        }
+        let needed = DraftValidation.spaceNeeded(forMixOfSeconds: info.duration)
+        try? FileManager.default.createDirectory(at: outputRoot, withIntermediateDirectories: true)
+        if let free = try? outputRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage,
+           free < needed {
+            let format = ByteCountFormatter()
+            setError = "Not enough free space for this mix: it needs about \(format.string(fromByteCount: needed)) and \(format.string(fromByteCount: free)) is free."
+            return
+        }
+        // Find out now whether Shazam will answer, not after the download.
         setStage = "Checking Shazam"
         do {
             try await shazamPreflight()
@@ -303,7 +396,7 @@ final class AppModel {
     }
 
     func startYouTubeSetJob() {
-        let tracks = readyTracks(setTracks)
+        let tracks = readyTracks(setTracks, in: .text)
         guard setDownloadableCount > 0 else { return }
         let job = Job(name: jobName(setName, fallback: "Set"), kind: .youtubeSet, sourceURL: setSourceURL, tracks: tracks)
         guard run(job) != nil else { return }

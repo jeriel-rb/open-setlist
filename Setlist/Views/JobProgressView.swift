@@ -146,6 +146,13 @@ struct JobProgressView: View {
                     ConfidenceBadge(confidence: track.confidence, note: track.note)
                 }
                 .width(130)
+                TableColumn("Source", value: \.sourceLabel) { track in
+                    if let address = track.sourceURL, let url = URL(string: address) {
+                        Link(track.sourceLabel, destination: url)
+                            .help("Open \(address)")
+                    }
+                }
+                .width(84)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
             // Double-click (the primary action) previews a downloaded song in the mini player.
@@ -302,8 +309,15 @@ struct MixStatusView: View {
 }
 
 /// Values the table sorts by. Tracks that have no value yet sort after those that do.
-private extension Track {
+extension Track {
     var statusRank: String { status.rawValue }
+    /// The site a song was downloaded from, by name. Empty when it is not known.
+    var sourceLabel: String {
+        guard let sourceURL, let host = URL(string: sourceURL)?.host?.lowercased() else { return "" }
+        if host.hasSuffix("youtube.com") || host.hasSuffix("youtu.be") { return "YouTube" }
+        if host.hasSuffix("soundcloud.com") { return "SoundCloud" }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
     var startOrLast: Double { start ?? .greatestFiniteMagnitude }
     var bpmOrLast: Int { bpm ?? .max }
     /// Camelot codes in wheel order: 1A, 1B, 2A … 12B.

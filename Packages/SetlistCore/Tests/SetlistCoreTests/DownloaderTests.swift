@@ -27,7 +27,7 @@ final class DownloaderTests: XCTestCase {
             "--no-playlist", "--extract-audio", "--audio-format", "mp3", "--audio-quality", "192K",
             "--embed-thumbnail", "--embed-metadata", "--no-overwrites", "--newline", "--progress",
             "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
-            "--ffmpeg-location", "/tools", "--print", "after_move:filepath",
+            "--ffmpeg-location", "/tools", "--print", "after_move:webpage_url", "--print", "after_move:filepath",
             "-o", "/out/01 - x.%(ext)s", "https://www.youtube.com/watch?v=a&list=PL1",
         ])
     }
@@ -114,6 +114,19 @@ final class DownloaderTests: XCTestCase {
         XCTAssertEqual(Downloader.activity(for: "[youtube] abc: Downloading webpage"), "Fetching video info")
         XCTAssertEqual(Downloader.activity(for: "[soundcloud:search] query: Downloading search page"), "Searching SoundCloud")
         XCTAssertNil(Downloader.activity(for: "random noise"))
+    }
+
+    func testSourcePageIsStoredOnTheTrack() async throws {
+        let runner = FakeRunner()
+        let path = "\(root.path)/set/01 - A - B.mp3"
+        runner.fallback = { _ in .ok("https://www.youtube.com/watch?v=abc123\n" + path + "\n") }
+        let store = JobStore(root: root)
+        var job = Job(name: "set", kind: .pasteList, tracks: [Track(index: 1, query: "A - B")])
+        _ = try store.directory(for: &job)
+        let finished = await Downloader(runner: runner, locator: locator).downloadAll(job: job, store: store) { _ in }
+        XCTAssertEqual(finished.tracks[0].status, .done)
+        XCTAssertEqual(finished.tracks[0].outputPath, path)
+        XCTAssertEqual(finished.tracks[0].sourceURL, "https://www.youtube.com/watch?v=abc123")
     }
 
     func testDownloadFraction() {

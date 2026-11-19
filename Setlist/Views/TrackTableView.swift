@@ -6,6 +6,13 @@ struct TrackTableView: View {
     @Binding var tracks: [Track]
     /// Shows the timestamp and match-confidence columns (YouTube Set).
     var detailed: Bool
+    /// Which rules the rows are checked against; rows that break one get a warning mark.
+    var context: DraftValidation.Context = .text
+
+    private var problems: [Track.ID: String] {
+        let found = DraftValidation.problems(in: tracks.map(\.query), context: context)
+        return Dictionary(uniqueKeysWithValues: zip(tracks, found).compactMap { track, problem in problem.map { (track.id, $0) } })
+    }
 
     @State private var selection = Set<Track.ID>()
 
@@ -69,21 +76,33 @@ struct TrackTableView: View {
     }
 
     private var queryColumn: TableColumn<Binding<Track>, Never, QueryCell, Text> {
-        TableColumn("Artist - Title") { (track: Binding<Track>) in
-            QueryCell(track: track)
+        let problems = problems
+        return TableColumn("Artist - Title") { (track: Binding<Track>) in
+            QueryCell(track: track, problem: problems[track.wrappedValue.id])
         }
     }
 }
 
 private struct QueryCell: View {
     @Binding var track: Track
+    /// Why this row will be skipped, when it will be.
+    var problem: String?
 
     var body: some View {
-        TextField("Artist - Title", text: $track.query)
-            .textFieldStyle(.plain)
-            .onChange(of: track.query) { _, new in
-                if track.confidence == .low, !new.isEmpty { track.confidence = .high }
+        HStack(spacing: 6) {
+            TextField("Artist - Title", text: $track.query)
+                .textFieldStyle(.plain)
+                .onChange(of: track.query) { _, new in
+                    if track.confidence == .low, !new.isEmpty { track.confidence = .high }
+                }
+            if let problem {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .help(problem + " This line will be skipped.")
             }
+        }
     }
 }
 
@@ -98,7 +117,7 @@ struct ConfidenceBadge: View {
             .padding(.vertical, 2)
             .background(color.opacity(0.18), in: Capsule())
             .foregroundStyle(color)
-            .help(note ?? label)
+            .help(confidence.explanation)
     }
 
     private var label: String {
