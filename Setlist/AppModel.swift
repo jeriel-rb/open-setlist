@@ -42,6 +42,7 @@ final class AppModel {
         didSet { defaults.set(keepOriginalMix, forKey: Keys.keepOriginalMix) }
     }
     var ytDlpVersion: String?
+    var isUpdatingYtDlp = false
 
     private let defaults: UserDefaults
     let runner: any CommandRunning
@@ -201,11 +202,17 @@ final class AppModel {
     }
 
     func loadYtDlpVersion() async {
-        guard let ytDlp = try? locator.url(for: .ytDlp) else {
-            ytDlpVersion = "not found"
-            return
+        ytDlpVersion = await YtDlpUpdater().installedVersion(runner: runner, locator: locator) ?? "not found"
+    }
+
+    func updateYtDlp() async {
+        isUpdatingYtDlp = true
+        defer { isUpdatingYtDlp = false }
+        do {
+            _ = try await YtDlpUpdater().update()
+            await loadYtDlpVersion()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        let result = try? await runner.run(ytDlp, arguments: ["--version"], onLine: nil)
-        ytDlpVersion = result?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? "unknown"
     }
 }

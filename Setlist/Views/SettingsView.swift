@@ -27,9 +27,12 @@ struct SettingsView: View {
                 LabeledContent("yt-dlp") {
                     HStack {
                         Text(model.ytDlpVersion ?? "…")
-                        Button("Update") {}
-                            .disabled(true)
-                            .help("Available in the next build")
+                        if model.isUpdatingYtDlp {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Button("Update") { Task { await model.updateYtDlp() } }
+                                .help("Download the latest yt-dlp release. Fixes most \"download failed\" problems after YouTube changes.")
+                        }
                     }
                 }
             }
