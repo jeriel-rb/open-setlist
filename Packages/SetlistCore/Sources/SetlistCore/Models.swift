@@ -98,6 +98,8 @@ public struct Job: Codable, Equatable, Identifiable, Sendable {
     public var tracks: [Track]
     /// Folder name under the store root, assigned by `JobStore.directory(for:)`.
     public var directoryName: String?
+    /// Identification checkpoint of a YouTube Set whose songs are found by listening to the mix.
+    public var mix: MixState?
 
     public init(name: String, kind: JobKind, sourceURL: URL? = nil, tracks: [Track]) {
         self.id = UUID()
@@ -110,7 +112,41 @@ public struct Job: Codable, Equatable, Identifiable, Sendable {
 }
 
 
+/// How far the identification of a mix has got. Saved in `job.json` after every step, so a stopped,
+/// failed or interrupted run continues from here instead of starting over.
+public struct MixState: Codable, Equatable, Sendable {
+    public enum Phase: String, Codable, Sendable {
+        case downloadingAudio, identifying, finished
+    }
+
+    public static let fileName = "mix.wav"
+    public static let keptFileName = "original mix.wav"
+
+    public var phase: Phase = .downloadingAudio
+    /// 0…1 while the mix audio downloads.
+    public var audioProgress: Double?
+    /// Length of the mix in seconds, known once its audio is on disk.
+    public var duration: Double?
+    /// How many slices the mix divides into.
+    public var sliceCount: Int?
+    /// One entry per slice already sent to Shazam, in order.
+    public var slices: [SliceMatch] = []
+    /// Why the run stopped early, shown with a Resume button.
+    public var message: String?
+
+    public init() {}
+
+    /// 0…1 over the slices, nil before the mix has been measured.
+    public var identifyProgress: Double? {
+        guard let sliceCount, sliceCount > 0 else { return nil }
+        return min(1, Double(slices.count) / Double(sliceCount))
+    }
+}
+
 public extension Job {
+    /// True for a mix whose identification stopped before the end and can be continued.
+    var canResumeMix: Bool { mix.map { $0.phase != .finished } ?? false }
+
     static let interruptedNote = "Interrupted when the app quit"
 
     var hasActiveTracks: Bool { tracks.contains { $0.status.isActive } }

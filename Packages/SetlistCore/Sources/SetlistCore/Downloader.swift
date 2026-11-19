@@ -187,7 +187,7 @@ public struct Downloader: Sendable {
         return job
     }
 
-    private static func describe(_ error: DownloadError) -> String {
+    static func describe(_ error: DownloadError) -> String {
         switch error {
         case let .allSourcesFailed(stderr): return stderr.isEmpty ? "not found" : stderr
         case let .tool(toolError): return toolError.localizedDescription

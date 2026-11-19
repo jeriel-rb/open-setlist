@@ -25,6 +25,17 @@ public struct MixFetcher: Sendable {
         self.locator = locator
     }
 
+    /// A YouTube watch link reduced to its video: `…/watch?v=ID&list=…&start_radio=1` → `…/watch?v=ID`.
+    /// Anything else is returned unchanged.
+    public static func canonicalURL(_ url: URL) -> URL {
+        guard let host = url.host?.lowercased(), host.hasSuffix("youtube.com"), url.path == "/watch",
+              var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let video = parts.queryItems?.first(where: { $0.name == "v" })?.value, !video.isEmpty else { return url }
+        parts.queryItems = [URLQueryItem(name: "v", value: video)]
+        parts.fragment = nil
+        return parts.url ?? url
+    }
+
     public static func infoArguments(url: URL) -> [String] {
         [
             "-J", "--no-playlist", "--write-comments",

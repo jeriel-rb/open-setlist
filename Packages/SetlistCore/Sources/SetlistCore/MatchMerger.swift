@@ -1,7 +1,7 @@
 import Foundation
 
 /// One Shazam catalog match.
-public struct Hit: Equatable, Sendable {
+public struct Hit: Codable, Equatable, Sendable {
     public let shazamID: String
     public let title: String
     public let artist: String
@@ -16,7 +16,7 @@ public struct Hit: Equatable, Sendable {
 }
 
 /// The result of matching one slice of the mix.
-public struct SliceMatch: Equatable, Sendable {
+public struct SliceMatch: Codable, Equatable, Sendable {
     public let start: Double
     public let hit: Hit?
 
