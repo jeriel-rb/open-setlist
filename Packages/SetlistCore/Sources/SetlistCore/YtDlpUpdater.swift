@@ -25,6 +25,23 @@ public struct YtDlpUpdater: Sendable {
         self.overrideDir = overrideDir
     }
 
+    public static let latestReleaseURL = URL(string: "https://github.com/yt-dlp/yt-dlp/releases/latest")!
+
+    /// The version a release page address names: `…/releases/tag/2026.10.26` → "2026.10.26".
+    public static func version(fromReleaseURL url: URL) -> String? {
+        let parts = url.pathComponents
+        guard let tag = parts.firstIndex(of: "tag"), tag + 1 < parts.count else { return nil }
+        return parts[tag + 1]
+    }
+
+    /// The newest released version, read from where GitHub redirects "latest" to. No download involved.
+    public func latestVersion() async throws -> String? {
+        var request = URLRequest(url: Self.latestReleaseURL)
+        request.httpMethod = "HEAD"
+        let (_, response) = try await session.data(for: request)
+        return response.url.flatMap(Self.version(fromReleaseURL:))
+    }
+
     /// Fetches the binary, writes it atomically as `overrideDir/yt-dlp`, and marks it executable.
     public func update() async throws -> URL {
         let (data, response) = try await session.data(from: Self.downloadURL)

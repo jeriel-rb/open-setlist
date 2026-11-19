@@ -34,6 +34,11 @@ final class YtDlpUpdaterTests: XCTestCase {
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: file.path))
     }
 
+    func testVersionFromReleaseURL() {
+        XCTAssertEqual(YtDlpUpdater.version(fromReleaseURL: URL(string: "https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26")!), "2026.10.26")
+        XCTAssertNil(YtDlpUpdater.version(fromReleaseURL: YtDlpUpdater.latestReleaseURL))
+    }
+
     func testUpdateFailsOnHTTPError() async {
         StubURLProtocol.respond { _ in (404, Data()) }
         let updater = YtDlpUpdater(session: session(), overrideDir: dir)

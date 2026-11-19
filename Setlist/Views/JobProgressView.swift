@@ -6,6 +6,8 @@ struct JobProgressView: View {
     @Environment(Player.self) private var player
     let job: Job
     @State private var selectedTrack: Track.ID?
+    /// Click a column header to sort by it; click again to reverse.
+    @State private var sortOrder = [KeyPathComparator(\Track.index)]
     @State private var title = ""
     @State private var titleHovered = false
     @FocusState private var titleFocused: Bool
@@ -88,20 +90,20 @@ struct JobProgressView: View {
                 ProgressView(value: Double(finished), total: Double(max(job.tracks.count, 1)))
             }
 
-            Table(job.tracks, selection: $selectedTrack) {
-                TableColumn("") { track in
+            Table(job.tracks.sorted(using: sortOrder), selection: $selectedTrack, sortOrder: $sortOrder) {
+                TableColumn("", value: \.statusRank) { track in
                     StatusIcon(status: track.status)
                 }
                 .width(22)
-                TableColumn("#") { track in
+                TableColumn("#", value: \.index) { track in
                     Text(String(format: "%02d", track.index)).monospacedDigit().foregroundStyle(.secondary)
                 }
                 .width(32)
-                TableColumn("Time") { track in
+                TableColumn("Time", value: \.startOrLast) { track in
                     Text(track.start.map(JobStore.timestamp) ?? "").monospacedDigit().foregroundStyle(.secondary)
                 }
                 .width(job.kind == .youtubeSet ? 64 : 0)
-                TableColumn("Track") { track in
+                TableColumn("Track", value: \.query) { track in
                     VStack(alignment: .leading, spacing: 1) {
                         Text(track.query).lineLimit(1)
                         if let activity = track.activity, track.status.isActive {
@@ -116,11 +118,11 @@ struct JobProgressView: View {
                         }
                     }
                 }
-                TableColumn("BPM") { track in
+                TableColumn("BPM", value: \.bpmOrLast) { track in
                     Text(track.bpm.map(String.init) ?? "").monospacedDigit().foregroundStyle(.secondary)
                 }
                 .width(44)
-                TableColumn("Key") { track in
+                TableColumn("Key", value: \.camelotRank) { track in
                     if let key = track.key {
                         Text(key)
                             .font(.caption.weight(.semibold).monospacedDigit())
@@ -131,7 +133,7 @@ struct JobProgressView: View {
                     }
                 }
                 .width(48)
-                TableColumn("Match") { track in
+                TableColumn("Match", value: \.confidence.rawValue) { track in
                     ConfidenceBadge(confidence: track.confidence, note: track.note)
                 }
                 .width(130)
@@ -249,6 +251,18 @@ struct MixStatusView: View {
             guard let duration = mix.duration, let progress = mix.identifyProgress else { return "" }
             return "\(JobStore.timestamp(duration * progress)) of \(JobStore.timestamp(duration))"
         }
+    }
+}
+
+/// Values the table sorts by. Tracks that have no value yet sort after those that do.
+private extension Track {
+    var statusRank: String { status.rawValue }
+    var startOrLast: Double { start ?? .greatestFiniteMagnitude }
+    var bpmOrLast: Int { bpm ?? .max }
+    /// Camelot codes in wheel order: 1A, 1B, 2A … 12B.
+    var camelotRank: Int {
+        guard let key, let number = Int(key.prefix { $0.isNumber }) else { return .max }
+        return number * 2 + (key.hasSuffix("B") ? 1 : 0)
     }
 }
 

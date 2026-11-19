@@ -23,8 +23,10 @@ struct SettingsView: View {
                     Text("192 kbps").tag("192K")
                     Text("128 kbps").tag("128K")
                 }
-                Toggle("Keep original mix audio", isOn: $model.keepOriginalMix)
-                    .help("YouTube Set: when the mix had to be downloaded to identify it, save it in the job folder as “original mix.wav”.")
+                Toggle(isOn: $model.keepOriginalMix) {
+                    Text("Keep the full mix after identifying it")
+                    Text("YouTube Set only. The whole mix is downloaded so Shazam can listen to it, then deleted. Turn this on to keep it in the job folder as one long file, “original mix.wav”.")
+                }
             }
             FileNameSettings(format: $model.fileNameFormat)
             Section("Appearance") {
@@ -34,15 +36,22 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
             }
             Section("Tools") {
-                LabeledContent("yt-dlp") {
+                LabeledContent {
                     HStack {
                         Text(model.ytDlpVersion ?? "…")
                         if model.isUpdatingYtDlp {
                             ProgressView().controlSize(.small)
                         } else {
                             Button("Update") { Task { await model.updateYtDlp() } }
-                                .help("Download the latest yt-dlp release. Fixes most \"download failed\" problems after YouTube changes.")
+                                .help("Get the latest yt-dlp. Fixes most “download failed” problems after YouTube changes.")
                         }
+                    }
+                } label: {
+                    Text("yt-dlp")
+                    if let result = model.ytDlpUpdateResult {
+                        Text(result)
+                    } else if model.isUpdatingYtDlp {
+                        Text("Checking for a newer version…")
                     }
                 }
             }
@@ -70,30 +79,29 @@ private struct FileNameSettings: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            ForEach(Array(format.order.enumerated()), id: \.element) { position, part in
-                HStack {
-                    Toggle(Self.label(part), isOn: Binding(
-                        get: { format.included.contains(part) },
-                        set: { on in
-                            if on { format.included.insert(part) } else { format.included.remove(part) }
-                        }))
-                    Spacer()
-                    Button {
-                        format.order.swapAt(position, position - 1)
-                    } label: {
-                        Image(systemName: "arrow.up")
+            // Left to right, the way the parts appear in the name.
+            HStack(spacing: 8) {
+                ForEach(Array(format.order.enumerated()), id: \.element) { position, part in
+                    HStack(spacing: 4) {
+                        Toggle(Self.label(part), isOn: Binding(
+                            get: { format.included.contains(part) },
+                            set: { on in
+                                if on { format.included.insert(part) } else { format.included.remove(part) }
+                            }))
+                        .toggleStyle(.checkbox)
+                        Button {
+                            moveRight(position)
+                        } label: {
+                            Image(systemName: "arrow.right")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(position == format.order.count - 1 ? "Move to the front" : "Move one place to the right")
                     }
-                    .disabled(position == 0)
-                    .help("Move earlier in the name")
-                    Button {
-                        format.order.swapAt(position, position + 1)
-                    } label: {
-                        Image(systemName: "arrow.down")
-                    }
-                    .disabled(position == format.order.count - 1)
-                    .help("Move later in the name")
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6))
                 }
-                .buttonStyle(.borderless)
+                Spacer(minLength: 0)
             }
             Picker("Between the parts", selection: $format.separator) {
                 ForEach(Self.separators, id: \.value) { Text($0.label).tag($0.value) }
@@ -107,13 +115,13 @@ private struct FileNameSettings: View {
             TextField("Text before", text: $format.prefix, prompt: Text("Nothing"))
             TextField("Text after", text: $format.suffix, prompt: Text("Nothing"))
             if format != .standard {
-                Button("Back to “01 - Artist - Title”") { format = .standard }
+                Button("Reset to default") { format = .standard }
             }
         } header: {
             Text("File names")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Tick the parts you want and use the arrows to put them in order. Used for downloads you start from now on; files you already have keep their names.")
+                Text("Tick the parts you want. The arrow moves a part one place to the right, and the last one back to the front. Used for downloads you start from now on; files you already have keep their names.")
                 if format.canCollide {
                     Label("Without the number, two songs with the same name are saved as one file.", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
@@ -122,6 +130,15 @@ private struct FileNameSettings: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// One place later in the name; from the end it wraps round to the start.
+    private func moveRight(_ position: Int) {
+        if position == format.order.count - 1 {
+            format.order.insert(format.order.removeLast(), at: 0)
+        } else {
+            format.order.swapAt(position, position + 1)
         }
     }
 

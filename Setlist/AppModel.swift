@@ -91,6 +91,8 @@ final class AppModel {
     }
     var ytDlpVersion: String?
     var isUpdatingYtDlp = false
+    /// What the last press of Update did, shown next to the button.
+    var ytDlpUpdateResult: String?
 
     private let defaults: UserDefaults
     let runner: any CommandRunning
@@ -513,12 +515,22 @@ final class AppModel {
 
     func updateYtDlp() async {
         isUpdatingYtDlp = true
+        ytDlpUpdateResult = nil
         defer { isUpdatingYtDlp = false }
+        let updater = YtDlpUpdater()
+        let before = await updater.installedVersion(runner: runner, locator: locator)
+        // Ask which version is newest before fetching 35 MB that may be the copy already installed.
+        if let before, let latest = try? await updater.latestVersion(), latest == before {
+            ytDlpUpdateResult = "You have the latest version."
+            return
+        }
         do {
-            _ = try await YtDlpUpdater().update()
+            _ = try await updater.update()
             await loadYtDlpVersion()
+            let after = await updater.installedVersion(runner: runner, locator: locator)
+            ytDlpUpdateResult = after == before ? "You have the latest version." : "Updated to \(after ?? "the latest version")."
         } catch {
-            errorMessage = error.localizedDescription
+            ytDlpUpdateResult = "Update failed: \(error.localizedDescription)"
         }
     }
 }
