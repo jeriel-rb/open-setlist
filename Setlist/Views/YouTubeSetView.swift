@@ -9,7 +9,7 @@ struct YouTubeSetView: View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 12) {
             DraftHeader(title: "Identify a mix",
-                        detail: "Paste the link of a DJ set or mix. A tracklist posted in the description or comments is used when there is one; otherwise every 30 seconds of the audio is identified with Shazam.")
+                        detail: "Paste the link of a DJ set or mix. A tracklist posted in the description or comments is used when there is one. Otherwise the mix is downloaded and Shazam names its songs one by one; each appears in History and downloads as soon as it is found.")
 
             HStack {
                 TextField("https://www.youtube.com/watch?v=…", text: $model.setURL)
@@ -29,13 +29,9 @@ struct YouTubeSetView: View {
             }
 
             if let stage = model.setStage {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let fraction = stage.fraction {
-                        ProgressView(value: fraction)
-                    } else {
-                        ProgressView().progressViewStyle(.linear)
-                    }
-                    Text(stage.text + "…")
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text(stage + "…")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -72,7 +68,7 @@ struct YouTubeSetView: View {
         switch source {
         case .description: "Tracklist found in the description. Fix any line before downloading."
         case .comments: "Tracklist found in a comment. Fix any line before downloading."
-        case .shazam: "Identified with Shazam. “Original only” means the mix may play a remix of that song."
+        case .shazam: "Identified with Shazam."
         }
     }
 }

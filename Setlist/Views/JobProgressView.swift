@@ -55,6 +55,13 @@ struct JobProgressView: View {
                         Label("Stop", systemImage: "stop.fill")
                     }
                     .help("Stop downloading. Finished files are kept.")
+                } else if job.canResumeMix {
+                    Button {
+                        model.retry(job)
+                    } label: {
+                        Label("Resume", systemImage: "play.fill")
+                    }
+                    .help("Continue identifying the mix from where it stopped.")
                 } else if job.retryableCount > 0 {
                     Button {
                         model.retry(job)
@@ -68,6 +75,10 @@ struct JobProgressView: View {
                 } label: {
                     Label("Show in Finder", systemImage: "folder")
                 }
+            }
+
+            if let mix = job.mix, mix.phase != .finished || mix.message != nil {
+                MixStatusView(mix: mix, running: running)
             }
 
             ProgressView(value: Double(finished), total: Double(max(job.tracks.count, 1)))
@@ -147,6 +158,71 @@ struct JobProgressView: View {
         if cancelled > 0 { parts.append("\(cancelled) cancelled") }
         if let dir = model.directory(of: job) { parts.append(dir.tildePath) }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// What is happening to the mix itself: its audio download, how far Shazam has listened, and why it stopped.
+struct MixStatusView: View {
+    let mix: MixState
+    let running: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: mix.phase == .downloadingAudio ? "arrow.down.circle" : "waveform")
+                    .foregroundStyle(.secondary)
+                Text(headline)
+                Spacer()
+                Text(detail)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            if mix.phase != .finished {
+                if let progress, progress > 0 || !running {
+                    ProgressView(value: progress)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
+            }
+            if let message = mix.message {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var progress: Double? {
+        switch mix.phase {
+        case .downloadingAudio: mix.audioProgress
+        case .identifying: mix.identifyProgress
+        case .finished: 1
+        }
+    }
+
+    private var headline: String {
+        switch mix.phase {
+        case .downloadingAudio:
+            running ? "Downloading the mix audio" : "Mix audio not downloaded yet"
+        case .identifying:
+            running ? "Listening to \(MixState.fileName) with Shazam" : "Paused. \(MixState.fileName) is saved in the job folder"
+        case .finished:
+            "Finished listening to the mix"
+        }
+    }
+
+    private var detail: String {
+        switch mix.phase {
+        case .downloadingAudio:
+            return mix.audioProgress.map { "\(Int($0 * 100))%" } ?? ""
+        case .identifying, .finished:
+            guard let duration = mix.duration, let progress = mix.identifyProgress else { return "" }
+            return "\(JobStore.timestamp(duration * progress)) of \(JobStore.timestamp(duration))"
+        }
     }
 }
 

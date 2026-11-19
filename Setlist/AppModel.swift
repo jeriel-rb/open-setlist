@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import Observation
 import SetlistCore
@@ -34,31 +35,6 @@ enum AppAppearance: String, CaseIterable, Identifiable {
     }
 }
 
-/// Where a YouTube Set identification currently is.
-enum IdentifyStage: Equatable, Sendable {
-    case fetchingInfo
-    /// Fraction downloaded, nil until yt-dlp reports one.
-    case downloadingAudio(Double?)
-    case identifying(Double)
-
-    var text: String {
-        switch self {
-        case .fetchingInfo: "Reading the video's description and comments"
-        case let .downloadingAudio(fraction): fraction.map { "Downloading audio \(Int($0 * 100))%" } ?? "Downloading audio"
-        case let .identifying(fraction): "Identifying songs \(Int(fraction * 100))%"
-        }
-    }
-
-    /// nil shows an indeterminate bar.
-    var fraction: Double? {
-        switch self {
-        case .fetchingInfo: nil
-        case let .downloadingAudio(fraction): fraction
-        case let .identifying(fraction): fraction
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class AppModel {
@@ -84,16 +60,14 @@ final class AppModel {
     var setURL = ""
     var setName = ""
     var setTracks: [Track] = []
-    /// Where the tracklist came from; nil until an identification finishes.
+    /// Where the posted tracklist was found; nil when there is none on screen.
     var setSource: IdentifyResult.Source?
-    /// Non-nil while an identification is running.
-    var setStage: IdentifyStage?
+    /// What the look-up is doing right now; nil when idle.
+    var setStage: String?
     var setError: String?
     private var identifyTask: Task<Void, Never>?
-    /// The link the current `setTracks` were identified from.
+    /// The link the current `setTracks` came from.
     private var setSourceURL: URL?
-    /// Folder holding the downloaded `mix.wav` of the current draft, when Shazam was needed.
-    private var setWorkDir: URL?
 
     // MARK: Settings (persisted in UserDefaults)
     var outputRoot: URL {
@@ -128,8 +102,8 @@ final class AppModel {
     /// yt-dlp is killed if it prints nothing for this long, so one dead connection cannot hang a job.
     static let idleTimeout: TimeInterval = 180
 
-    /// Scratch space for mix audio while a set is being identified.
-    static let workRoot: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    /// Where earlier versions kept mix audio during identification; cleared on launch.
+    static let legacyWorkRoot: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Setlist/work", isDirectory: true)
 
     init(defaults: UserDefaults = .standard, runner: any CommandRunning = ProcessRunner(idleTimeout: AppModel.idleTimeout), locator: ToolLocator = .standard()) {
@@ -140,8 +114,7 @@ final class AppModel {
         self.audioQuality = defaults.string(forKey: Keys.audioQuality) ?? "0"
         self.keepOriginalMix = defaults.bool(forKey: Keys.keepOriginalMix)
         self.appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .system
-        // Mix audio left behind by a crash or quit is hundreds of megabytes; nothing can resume it.
-        try? FileManager.default.removeItem(at: Self.workRoot)
+        try? FileManager.default.removeItem(at: Self.legacyWorkRoot)
         reloadJobs()
     }
 
@@ -257,27 +230,27 @@ final class AppModel {
         readyTracks(setTracks).filter { $0.confidence != .low }.count
     }
 
-    /// Finds the tracklist of the mix at `setURL`: from its description or comments when one is posted
-    /// there, otherwise by downloading the audio and running ShazamKit over it.
+    /// Looks up the mix at `setURL`. A tracklist posted in its description or comments is put on screen
+    /// to review. Without one, the mix becomes a job straight away: its audio is downloaded and Shazam
+    /// names the songs one by one, each appearing and downloading as it is found.
     func startIdentify() {
         guard identifyTask == nil else { return }
         let text = setURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard TrackParser.isURL(text), let url = URL(string: text) else {
+        guard TrackParser.isURL(text), let pasted = URL(string: text) else {
             setError = "Paste the link of a YouTube mix first."
             return
         }
-        discardSetWork()
+        let url = MixFetcher.canonicalURL(pasted)
         setTracks = []
         setSource = nil
         setError = nil
-        setStage = .fetchingInfo
+        setStage = "Reading the video's description and comments"
         identifyTask = Task {
             do {
                 try await identify(url)
             } catch {
-                // A stopped run ends in a cancellation or a killed yt-dlp; neither is worth an error message.
+                // A stopped look-up ends in a cancellation or a killed yt-dlp; neither is worth an error message.
                 if !Task.isCancelled { setError = error.localizedDescription }
-                discardSetWork()
             }
             setStage = nil
             identifyTask = nil
@@ -285,67 +258,79 @@ final class AppModel {
     }
 
     private func identify(_ url: URL) async throws {
-        let fetcher = MixFetcher(runner: runner, locator: locator)
-        let info = try await fetcher.fetchInfo(url: url)
+        let info = try await MixFetcher(runner: runner, locator: locator).fetchInfo(url: url)
         try Task.checkCancellation()
         if setName.trimmingCharacters(in: .whitespaces).isEmpty { setName = info.title }
-        setSourceURL = url
 
         if let found = SetIdentifier.tracksFromText(info) {
+            setSourceURL = url
             setTracks = found.tracks
             setSource = found.source
             return
         }
 
-        let workDir = Self.workRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let wav = workDir.appendingPathComponent("mix.wav")
-        setWorkDir = workDir
-        setStage = .downloadingAudio(nil)
-        let identified = try await streaming(to: { [weak self] (stage: IdentifyStage) in
-            // Late progress must not bring the bar back after the run has ended.
-            if self?.setStage != nil { self?.setStage = stage }
-        }) { emit in
-            try await fetcher.fetchAudio(url: url, to: wav) { line in
-                if let fraction = Downloader.downloadFraction(in: line) { emit(.downloadingAudio(fraction)) }
-            }
-            try Task.checkCancellation()
-            emit(.identifying(0))
-            return try await SetIdentifier(matcher: ShazamMatcher()).identify(wav: wav) { emit(.identifying($0)) }
+        // No posted tracklist: Shazam has to listen. Find out now whether it will answer, not after the download.
+        setStage = "Checking Shazam"
+        do {
+            try await shazamPreflight()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw SetRunner.Error.matcherUnavailable(underlying: error)
         }
-        guard !identified.isEmpty else {
-            setError = "No songs could be identified in this mix."
-            discardSetWork()
-            return
-        }
-        setTracks = SetIdentifier.toTracks(identified)
-        setSource = .shazam
+        try Task.checkCancellation()
+        var job = Job(name: jobName(setName, fallback: "Set"), kind: .youtubeSet, sourceURL: url, tracks: [])
+        job.mix = MixState()
+        guard run(job) != nil else { return }
+        setURL = ""
+        setName = ""
     }
 
     func cancelIdentify() {
         identifyTask?.cancel()
     }
 
-    private func discardSetWork() {
-        if let dir = setWorkDir { try? FileManager.default.removeItem(at: dir) }
-        setWorkDir = nil
-    }
-
     func startYouTubeSetJob() {
         let tracks = readyTracks(setTracks)
         guard setDownloadableCount > 0 else { return }
         let job = Job(name: jobName(setName, fallback: "Set"), kind: .youtubeSet, sourceURL: setSourceURL, tracks: tracks)
-        guard let saved = run(job) else { return }
-        if keepOriginalMix, let workDir = setWorkDir, let dir = directory(of: saved) {
-            try? FileManager.default.moveItem(at: workDir.appendingPathComponent("mix.wav"),
-                                              to: dir.appendingPathComponent("original mix.wav"))
-        }
-        discardSetWork()
+        guard run(job) != nil else { return }
         setURL = ""
         setName = ""
         setTracks = []
         setSource = nil
         setSourceURL = nil
     }
+
+    /// Listens to a mix and downloads its songs as they are found, continuing from the job's checkpoint.
+    private var setRunner: SetRunner {
+        var runner = SetRunner(fetcher: MixFetcher(runner: self.runner, locator: locator), matcher: matcher,
+                               downloader: downloader, store: store)
+        runner.keepMix = keepOriginalMix
+        runner.preflight = shazamPreflight
+        return runner
+    }
+
+    private var matcher: any SliceMatching {
+        #if DEBUG
+        if usesDemoShazam { return DemoMatcher() }
+        #endif
+        return ShazamMatcher()
+    }
+
+    /// Throws when Shazam will not answer this copy of the app.
+    private var shazamPreflight: SetRunner.Preflight {
+        #if DEBUG
+        if usesDemoShazam { return {} }
+        #endif
+        return { try await ShazamMatcher.preflight() }
+    }
+
+    #if DEBUG
+    /// Debug builds launched with `-demoShazam YES` name songs from a fixed list instead of asking Shazam,
+    /// so the whole YouTube Set flow can be tried in a build that is not signed for ShazamKit.
+    private var usesDemoShazam: Bool { defaults.bool(forKey: "demoShazam") }
+    #endif
 
     // MARK: Running jobs
 
@@ -385,11 +370,12 @@ final class AppModel {
         }
     }
 
-    /// Re-runs the failed and cancelled tracks of a job.
+    /// Re-runs the failed and cancelled tracks of a job, and continues a mix that stopped before its end.
     func retry(_ job: Job) {
-        guard !isRunning(job), job.retryableCount > 0,
+        guard !isRunning(job), job.retryableCount > 0 || job.canResumeMix,
               let i = jobs.firstIndex(where: { $0.id == job.id }) else { return }
-        let reset = job.resettingForRetry()
+        var reset = job.resettingForRetry()
+        reset.mix?.message = nil
         jobs[i] = reset
         resume(reset)
     }
@@ -399,10 +385,23 @@ final class AppModel {
         isWorking = true
         let downloader = downloader
         let store = store
+        let setRunner = setRunner
         let jobID = job.id
         runningTasks[jobID] = Task {
-            var finished = await streaming(to: { (track: Track) in self.apply(track, to: jobID) }) { emit in
-                await downloader.downloadAll(job: job, store: store, onUpdate: emit)
+            var finished: Job
+            if job.canResumeMix {
+                // The runner reports the whole job each time: its tracklist grows as songs are identified.
+                finished = await streaming(to: { (snapshot: Job) in
+                    var snapshot = snapshot
+                    if let current = self.job(id: jobID) { snapshot.name = current.name }
+                    self.replace(snapshot)
+                }) { emit in
+                    await setRunner.run(job: job, onUpdate: emit)
+                }
+            } else {
+                finished = await streaming(to: { (track: Track) in self.apply(track, to: jobID) }) { emit in
+                    await downloader.downloadAll(job: job, store: store, onUpdate: emit)
+                }
             }
             // A rename made during the run only changed the name; move the folder now that nothing writes to it.
             if let current = self.job(id: jobID), current.name != finished.name {
@@ -512,3 +511,24 @@ extension URL {
     /// The path with the home folder shortened to `~`, for display.
     var tildePath: String { (path as NSString).abbreviatingWithTildeInPath }
 }
+
+#if DEBUG
+/// Stands in for Shazam in demo runs: the same song for two slices in a row, then the next one.
+private final class DemoMatcher: SliceMatching, @unchecked Sendable {
+    private static let songs = [
+        ("XG", "LEFT RIGHT"), ("KATSEYE", "Gabriela"), ("NewJeans", "ETA"), ("aespa", "Thirsty"),
+        ("FIFTY FIFTY", "Gravity"), ("ILLIT", "Lucky Girl Syndrome"),
+    ]
+    private let lock = NSLock()
+    private var calls = 0
+
+    func match(_ buffer: AVAudioPCMBuffer) async throws -> Hit? {
+        let call = lock.withLock { () -> Int in
+            defer { calls += 1 }
+            return calls
+        }
+        let (artist, title) = Self.songs[(call / 2) % Self.songs.count]
+        return Hit(shazamID: "demo-\(artist)-\(title)", title: title, artist: artist, confidence: nil)
+    }
+}
+#endif
