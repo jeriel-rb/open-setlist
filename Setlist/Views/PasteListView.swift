@@ -24,10 +24,10 @@ struct PasteListView: View {
                             count: model.draftTracks.count) {
                     model.startPasteListJob()
                 }
-            } else {
-                Spacer(minLength: 0)
             }
         }
+        // Fill the pane from the top, so every screen keeps the same 20 pt margin on all four sides.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(20)
         .navigationTitle("Text")
     }

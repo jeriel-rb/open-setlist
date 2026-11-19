@@ -83,7 +83,10 @@ struct JobProgressView: View {
                 MixStatusView(mix: mix, running: running)
             }
 
-            ProgressView(value: Double(finished), total: Double(max(job.tracks.count, 1)))
+            // Only while something is happening; a finished job has nothing left to show progress for.
+            if running {
+                ProgressView(value: Double(finished), total: Double(max(job.tracks.count, 1)))
+            }
 
             Table(job.tracks, selection: $selectedTrack) {
                 TableColumn("") { track in
