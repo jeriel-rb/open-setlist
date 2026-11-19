@@ -3,6 +3,7 @@ import SetlistCore
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Player.self) private var player
 
     var body: some View {
         @Bindable var model = model
@@ -26,6 +27,9 @@ struct ContentView: View {
                     ContentUnavailableView("Job not found", systemImage: "questionmark.folder")
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if player.isVisible { MiniPlayerView() }
         }
         .frame(minWidth: 820, minHeight: 520)
         .onAppear { model.applyAppearance() }

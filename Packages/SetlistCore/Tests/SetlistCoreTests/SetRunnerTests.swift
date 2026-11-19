@@ -68,6 +68,21 @@ final class SetRunnerTests: XCTestCase {
         XCTAssertEqual(saved?.mix, finished.mix)
     }
 
+    func testAnalysisIsStoredOnTracksFoundWhileListening() async throws {
+        let runner = makeRunner(mixSeconds: 180)
+        let locator = try TestTools.locator()
+        let downloader = Downloader(runner: runner, locator: locator) { _ in
+            TrackAnalysis(bpm: 100, camelot: "3A", keyName: "A# minor")
+        }
+        var setRunner = SetRunner(fetcher: MixFetcher(runner: runner, locator: locator),
+                                  matcher: FakeMatcher(hits: [a, a, b, b, c, c]), downloader: downloader, store: store)
+        setRunner.delay = .zero
+        let finished = await setRunner.run(job: makeJob()) { _ in }
+        XCTAssertEqual(finished.tracks.map(\.bpm), [100, 100, 100])
+        XCTAssertEqual(finished.tracks.map(\.key), ["3A", "3A", "3A"])
+        XCTAssertEqual(try store.loadAll().first?.tracks.map(\.bpm), [100, 100, 100])
+    }
+
     func testKeepMixRenamesTheAudio() async throws {
         var setRunner = try makeSetRunner(makeRunner(mixSeconds: 60), matcher: FakeMatcher(hits: [a, a]))
         setRunner.keepMix = true

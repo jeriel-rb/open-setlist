@@ -3,7 +3,9 @@ import SetlistCore
 
 struct JobProgressView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Player.self) private var player
     let job: Job
+    @State private var selectedTrack: Track.ID?
     @State private var title = ""
     @State private var titleHovered = false
     @FocusState private var titleFocused: Bool
@@ -83,7 +85,7 @@ struct JobProgressView: View {
 
             ProgressView(value: Double(finished), total: Double(max(job.tracks.count, 1)))
 
-            Table(job.tracks) {
+            Table(job.tracks, selection: $selectedTrack) {
                 TableColumn("") { track in
                     StatusIcon(status: track.status)
                 }
@@ -132,6 +134,15 @@ struct JobProgressView: View {
                 .width(130)
             }
             .tableStyle(.inset(alternatesRowBackgrounds: true))
+            // Double-click (the primary action) previews a downloaded song in the mini player.
+            .contextMenu(forSelectionType: Track.ID.self) { ids in
+                if let track = job.tracks.first(where: { ids.contains($0.id) }), let file = model.file(of: track, in: job) {
+                    Button("Play") { play(track) }
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                }
+            } primaryAction: { ids in
+                if let track = job.tracks.first(where: { ids.contains($0.id) }) { play(track) }
+            }
         }
         .padding(20)
         // A text field keeps focus when you click bare window background, so end the edit here.
@@ -143,6 +154,18 @@ struct JobProgressView: View {
     }
 
     private static let titleInset: CGFloat = 6
+
+    private func play(_ track: Track) {
+        guard let file = model.file(of: track, in: job) else {
+            if track.status == .done { model.errorMessage = "The file for “\(track.query)” is no longer in the job folder." }
+            return
+        }
+        do {
+            try player.play(file, title: file.deletingPathExtension().lastPathComponent)
+        } catch {
+            model.errorMessage = "Could not play “\(track.query)”: \(error.localizedDescription)"
+        }
+    }
 
     /// Saves the typed title. An empty one is not a name, so the old one comes back.
     private func commitTitle() {

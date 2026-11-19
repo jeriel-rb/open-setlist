@@ -469,6 +469,14 @@ final class AppModel {
         job.directoryName.map { outputRoot.appendingPathComponent($0, isDirectory: true) }
     }
 
+    /// The downloaded file of a track, or nil when it has none. The saved path is from download time,
+    /// so the file is looked up by name in the job's current folder (the job may have been renamed since).
+    func file(of track: Track, in job: Job) -> URL? {
+        guard track.status == .done, let saved = track.outputPath, let dir = directory(of: job) else { return nil }
+        let url = dir.appendingPathComponent(URL(fileURLWithPath: saved).lastPathComponent)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     func revealInFinder(_ job: Job) {
         guard let dir = directory(of: job) else { return }
         NSWorkspace.shared.open(dir)
