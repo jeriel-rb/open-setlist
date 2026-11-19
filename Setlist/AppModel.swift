@@ -21,12 +21,12 @@ final class AppModel {
 
     // MARK: Text draft
     var draftText = ""
-    var draftName = AppModel.defaultName("Text")
+    var draftName = ""
     var draftTracks: [Track] = []
 
     // MARK: Link draft
     var linkText = ""
-    var linkName = AppModel.defaultName("Links")
+    var linkName = ""
     var linkTracks: [Track] = []
     var linkFailures: [String] = []
     var isResolvingLinks = false
@@ -69,8 +69,17 @@ final class AppModel {
     var downloader: Downloader {
         var options = DownloadOptions()
         options.quality = audioQuality
-        return Downloader(runner: runner, locator: locator, options: options)
+        let ffmpeg = FFmpeg(runner: runner, locator: locator)
+        return Downloader(runner: runner, locator: locator, options: options) { url in
+            // CPU-heavy, so keep it off the cooperative pool's main lanes.
+            let analysis = await Task.detached(priority: .utility) { try? AudioAnalyzer().analyze(file: url) }.value
+            if let analysis { try? await ffmpeg.writeTags(file: url, bpm: analysis.bpm, key: analysis.id3Key) }
+            return analysis
+        }
     }
+
+    /// Download tasks by job id, so a running job can be stopped.
+    private var runningTasks: [UUID: Task<Void, Never>] = [:]
 
     static func defaultName(_ prefix: String, _ date: Date = Date()) -> String {
         let f = DateFormatter()
@@ -101,7 +110,7 @@ final class AppModel {
         let job = Job(name: draftName.isEmpty ? Self.defaultName("Text") : draftName, kind: .pasteList, tracks: tracks)
         draftText = ""
         draftTracks = []
-        draftName = Self.defaultName("Text")
+        draftName = ""
         run(job)
     }
 
@@ -125,7 +134,7 @@ final class AppModel {
         linkText = ""
         linkTracks = []
         linkFailures = []
-        linkName = Self.defaultName("Links")
+        linkName = ""
         run(job)
     }
 
@@ -146,13 +155,24 @@ final class AppModel {
         let store = store
         let snapshot = job
         let jobID = job.id
-        Task {
-            let finished = await downloader.downloadAll(job: snapshot, store: store) { track in
+        runningTasks[jobID] = Task {
+            var finished = await downloader.downloadAll(job: snapshot, store: store) { track in
                 Task { @MainActor [weak self] in self?.apply(track, to: jobID) }
             }
+            // The user may have renamed the job while it ran; keep the latest name and move the folder now.
+            if let current = jobs.first(where: { $0.id == jobID }), current.name != finished.name {
+                finished.name = current.name
+            }
+            try? store.syncDirectory(&finished)
             replace(finished)
-            isWorking = false
+            runningTasks[jobID] = nil
+            isWorking = !runningTasks.isEmpty
         }
+    }
+
+    /// Stops a running job. Tracks not yet finished are marked cancelled; finished files stay.
+    func cancel(_ job: Job) {
+        runningTasks[job.id]?.cancel()
     }
 
     private func apply(_ track: Track, to jobID: UUID) {
@@ -177,6 +197,22 @@ final class AppModel {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    /// Renames a job. While it is still downloading only the name changes; the folder follows when it finishes.
+    func rename(_ job: Job, to newName: String) {
+        guard let i = jobs.firstIndex(where: { $0.id == job.id }) else { return }
+        var updated = jobs[i]
+        do {
+            try store.rename(&updated, to: newName, moveFolder: !isRunning(updated))
+            jobs[i] = updated
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func isRunning(_ job: Job) -> Bool {
+        runningTasks[job.id] != nil || job.tracks.contains { $0.status.isActive }
     }
 
     func directory(of job: Job) -> URL? {

@@ -68,6 +68,61 @@ final class JobStoreTests: XCTestCase {
         XCTAssertEqual(try store.loadAll(), [])
     }
 
+    func testRenameMovesDirectoryAndSaves() throws {
+        var job = Job(name: "old name", kind: .pasteList, tracks: [Track(index: 1, query: "A - B")])
+        let oldDir = try store.directory(for: &job)
+        try store.save(job)
+        try "x".write(to: oldDir.appendingPathComponent("01 - A - B.mp3"), atomically: true, encoding: .utf8)
+
+        try store.rename(&job, to: "  new name  ")
+
+        XCTAssertEqual(job.name, "new name")
+        XCTAssertEqual(job.directoryName, "new name")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldDir.path))
+        let newDir = root.appendingPathComponent("new name")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newDir.appendingPathComponent("01 - A - B.mp3").path))
+        XCTAssertEqual(try store.loadAll().map(\.name), ["new name"])
+    }
+
+    func testRenameWithoutMovingThenSync() throws {
+        var job = Job(name: "running", kind: .pasteList, tracks: [])
+        let dir = try store.directory(for: &job)
+        try store.save(job)
+        try store.rename(&job, to: "renamed", moveFolder: false)
+        XCTAssertEqual(job.name, "renamed")
+        XCTAssertEqual(job.directoryName, "running")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.path))
+        XCTAssertEqual(try store.loadAll().first?.name, "renamed")
+
+        try store.syncDirectory(&job)
+        XCTAssertEqual(job.directoryName, "renamed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("renamed/job.json").path))
+    }
+
+    func testRenameToTakenNameGetsSuffix() throws {
+        var other = Job(name: "taken", kind: .pasteList, tracks: [])
+        _ = try store.directory(for: &other)
+        try store.save(other)
+        var job = Job(name: "mine", kind: .pasteList, tracks: [])
+        _ = try store.directory(for: &job)
+        try store.save(job)
+
+        try store.rename(&job, to: "taken")
+        XCTAssertEqual(job.directoryName, "taken 2")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("taken 2/job.json").path))
+    }
+
+    func testRenameToSameOrEmptyNameIsNoOp() throws {
+        var job = Job(name: "same", kind: .pasteList, tracks: [])
+        let dir = try store.directory(for: &job)
+        try store.save(job)
+        try store.rename(&job, to: "same")
+        try store.rename(&job, to: "   ")
+        XCTAssertEqual(job.name, "same")
+        XCTAssertEqual(try store.directory(for: &job), dir)
+    }
+
     func testWriteTracklistAndFailed() throws {
         var a = Track(index: 1, query: "A - B", start: 0)
         a.status = .done

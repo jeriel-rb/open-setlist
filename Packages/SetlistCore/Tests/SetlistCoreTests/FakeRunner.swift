@@ -15,6 +15,8 @@ final class FakeRunner: CommandRunning, @unchecked Sendable {
     var fallback: @Sendable (Call) -> CommandResult = { _ in CommandResult(exitCode: 0, stdout: "", stderr: "") }
     /// Lines to stream through `onLine` for each call, matched by call index.
     var streamed: [Int: [String]] = [:]
+    /// Simulated run time; cancellation interrupts it like a terminated process would.
+    var delay: Duration = .zero
 
     init(results: [CommandResult] = []) {
         self.scripted = results
@@ -34,6 +36,9 @@ final class FakeRunner: CommandRunning, @unchecked Sendable {
             lines.forEach { onLine?($0) }
         } else if let onLine {
             result.stdout.split(separator: "\n").forEach { onLine(String($0)) }
+        }
+        if delay > .zero {
+            do { try await Task.sleep(for: delay) } catch { return CommandResult(exitCode: 15, stdout: "", stderr: "terminated") }
         }
         return result
     }

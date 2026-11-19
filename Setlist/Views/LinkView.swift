@@ -29,20 +29,20 @@ struct LinkView: View {
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
 
             HStack {
-                TextField("Job name", text: $model.linkName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
                 Button {
                     Task { await model.resolveLinks() }
                 } label: {
                     if model.isResolvingLinks {
-                        ProgressView().controlSize(.small)
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Checking links…") }
                     } else {
-                        Text("Resolve")
+                        Text("Check links")
                     }
                 }
                 .disabled(model.isResolvingLinks || model.linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .keyboardShortcut(.return, modifiers: .command)
+                Text("Looks up each link and lists the songs it contains.")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
                 Spacer()
             }
 
@@ -61,8 +61,10 @@ struct LinkView: View {
                 TrackTableView(tracks: $model.linkTracks, detailed: false)
                     .frame(minHeight: 200)
                 HStack {
-                    Text("\(model.linkTracks.count) tracks")
-                        .foregroundStyle(.secondary)
+                    Text("Folder name")
+                    TextField(AppModel.defaultName("Links"), text: $model.linkName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 300)
                     Spacer()
                     Button("Download \(model.linkTracks.count) tracks") {
                         model.startLinkJob()

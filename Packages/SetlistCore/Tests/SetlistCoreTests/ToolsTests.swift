@@ -82,6 +82,19 @@ final class ToolsTests: XCTestCase {
         XCTAssertEqual(collected.lines, ["a", "b"])
     }
 
+    func testProcessRunnerTerminatesOnTaskCancellation() async throws {
+        let runner = ProcessRunner()
+        let started = Date()
+        let task = Task {
+            try await runner.run(URL(fileURLWithPath: "/bin/sleep"), arguments: ["10"], onLine: nil)
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        task.cancel()
+        let result = try? await task.value
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3, "sleep should have been terminated")
+        XCTAssertNotEqual(result?.exitCode, 0)
+    }
+
     func testProcessRunnerSplitsCarriageReturnProgress() async throws {
         let runner = ProcessRunner()
         let collected = LineCollector()

@@ -104,15 +104,20 @@ public struct ProcessRunner: CommandRunning {
             stderr.append(handle.availableData)
         }
 
-        let exitCode: Int32 = try await withCheckedThrowingContinuation { continuation in
-            process.terminationHandler = { p in
-                continuation.resume(returning: p.terminationStatus)
+        let exitCode: Int32 = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                process.terminationHandler = { p in
+                    continuation.resume(returning: p.terminationStatus)
+                }
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
+        } onCancel: {
+            // Stop the child so the continuation resumes promptly with a non-zero status.
+            if process.isRunning { process.terminate() }
         }
 
         // Drain whatever is left after termination, then stop the handlers.

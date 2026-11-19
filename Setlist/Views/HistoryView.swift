@@ -7,7 +7,7 @@ struct HistoryRow: View {
 
     private var done: Int { job.tracks.filter { $0.status == .done }.count }
     private var failed: Int { job.tracks.filter { $0.status == .failed }.count }
-    private var inProgress: Bool { job.tracks.contains { $0.status == .searching || $0.status == .downloading || $0.status == .pending } }
+    private var inProgress: Bool { job.tracks.contains { $0.status.isActive } }
 
     var body: some View {
         HStack {

@@ -119,6 +119,24 @@ public struct FFmpeg: Sendable {
         return parts[0] * 3600 + parts[1] * 60 + parts[2]
     }
 
+    /// Adds ID3 BPM and key tags, keeping audio and cover art untouched. Rewrites the file in place.
+    public func writeTags(file: URL, bpm: Int, key: String) async throws {
+        let ffmpeg = try locator.url(for: .ffmpeg)
+        let temp = file.deletingLastPathComponent().appendingPathComponent(".tagging-\(UUID().uuidString).mp3")
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let args = [
+            "-y", "-hide_banner", "-loglevel", "error",
+            "-i", file.path, "-map", "0", "-c", "copy", "-id3v2_version", "3",
+            "-metadata", "TBPM=\(bpm)", "-metadata", "TKEY=\(key)",
+            temp.path,
+        ]
+        let result = try await runner.run(ffmpeg, arguments: args, onLine: nil)
+        guard result.exitCode == 0, FileManager.default.fileExists(atPath: temp.path) else {
+            throw ToolError.failed(.ffmpeg, exitCode: result.exitCode, stderr: result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        _ = try FileManager.default.replaceItemAt(file, withItemAt: temp)
+    }
+
     private static func seconds(_ value: Double) -> String {
         value == value.rounded() ? String(Int(value)) : String(value)
     }

@@ -12,7 +12,32 @@ public enum Confidence: String, Codable, Sendable {
 }
 
 public enum TrackStatus: String, Codable, Sendable {
-    case pending, searching, downloading, done, failed, skipped
+    case pending, searching, downloading, analyzing, done, failed, skipped, cancelled
+
+    /// True while the track still has work ahead of it.
+    public var isActive: Bool { [.pending, .searching, .downloading, .analyzing].contains(self) }
+}
+
+/// Tempo and key of a downloaded file.
+public struct TrackAnalysis: Codable, Equatable, Sendable {
+    public let bpm: Int
+    /// Camelot wheel code, e.g. "8A" (A minor) or "8B" (C major).
+    public let camelot: String
+    /// Musical name, e.g. "A minor".
+    public let keyName: String
+
+    public init(bpm: Int, camelot: String, keyName: String) {
+        self.bpm = bpm
+        self.camelot = camelot
+        self.keyName = keyName
+    }
+
+    /// ID3 TKEY form derived from `keyName`: "A minor" → "Am", "F# major" → "F#".
+    public var id3Key: String {
+        let parts = keyName.split(separator: " ")
+        guard let note = parts.first else { return keyName }
+        return String(note) + (parts.last == "minor" ? "m" : "")
+    }
 }
 
 public struct Track: Codable, Equatable, Identifiable, Sendable {
@@ -28,6 +53,12 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
     public var outputPath: String?
     /// Human-readable detail (matched upload title, failure reason).
     public var note: String?
+    /// What is happening right now ("Downloading 45%"); nil when idle or finished.
+    public var activity: String?
+    public var bpm: Int?
+    /// Camelot code, e.g. "8A".
+    public var key: String?
+    public var keyName: String?
 
     public init(index: Int, query: String, start: Double? = nil, confidence: Confidence = .high) {
         self.id = UUID()

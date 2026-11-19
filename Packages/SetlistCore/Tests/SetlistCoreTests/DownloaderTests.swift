@@ -103,6 +103,81 @@ final class DownloaderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("job.json").path))
     }
 
+    func testActivityDescribesYtDlpLines() {
+        XCTAssertEqual(Downloader.activity(for: "[download]  45.2% of    3.67MiB at    2.76MiB/s ETA 00:01"), "Downloading 45%")
+        XCTAssertEqual(Downloader.activity(for: "[download] 100% of 3.67MiB in 00:00:01"), "Downloading 100%")
+        XCTAssertEqual(Downloader.activity(for: "[ExtractAudio] Destination: /x/01 - a.mp3"), "Converting to MP3")
+        XCTAssertEqual(Downloader.activity(for: "[Metadata] Adding metadata to \"/x/01 - a.mp3\""), "Adding cover and tags")
+        XCTAssertEqual(Downloader.activity(for: "[EmbedThumbnail] ffmpeg: Adding thumbnail"), "Adding cover and tags")
+        XCTAssertEqual(Downloader.activity(for: "[youtube:search] query: Downloading web client config"), "Searching YouTube")
+        XCTAssertEqual(Downloader.activity(for: "[youtube] abc: Downloading webpage"), "Fetching video info")
+        XCTAssertEqual(Downloader.activity(for: "[soundcloud:search] query: Downloading search page"), "Searching SoundCloud")
+        XCTAssertNil(Downloader.activity(for: "random noise"))
+    }
+
+    func testDownloadAllReportsActivityPerTrack() async throws {
+        let runner = FakeRunner()
+        runner.streamed = [0: ["[youtube:search] q: Downloading", "[download]  50.0% of 1MiB", "[ExtractAudio] Destination: x.mp3", "\(root.path)/set/01 - A - B.mp3"]]
+        let path = "\(root.path)/set/01 - A - B.mp3"
+        runner.fallback = { _ in .ok(path + "\n") }
+        let store = JobStore(root: root)
+        var job = Job(name: "set", kind: .pasteList, tracks: [Track(index: 1, query: "A - B")])
+        _ = try store.directory(for: &job)
+        let seen = LineCollector()
+        let finished = await Downloader(runner: runner, locator: locator).downloadAll(job: job, store: store) { track in
+            seen.append(track.activity ?? "-")
+        }
+        XCTAssertEqual(finished.tracks[0].status, .done)
+        XCTAssertNil(finished.tracks[0].activity)
+        XCTAssertTrue(seen.lines.contains("Searching YouTube"), "\(seen.lines)")
+        XCTAssertTrue(seen.lines.contains("Downloading 50%"), "\(seen.lines)")
+        XCTAssertTrue(seen.lines.contains("Converting to MP3"), "\(seen.lines)")
+    }
+
+    func testDownloadAllCancellationMarksRemainingTracks() async throws {
+        let runner = FakeRunner()
+        runner.fallback = { _ in .ok("") }
+        runner.delay = .seconds(5)
+        let store = JobStore(root: root)
+        var job = Job(name: "set", kind: .pasteList, tracks: (1...4).map { Track(index: $0, query: "T\($0) - S") })
+        _ = try store.directory(for: &job)
+        var options = DownloadOptions()
+        options.concurrency = 1
+        let downloader = Downloader(runner: runner, locator: locator, options: options)
+        let task = Task { await downloader.downloadAll(job: job, store: store) { _ in } }
+        try await Task.sleep(for: .milliseconds(300))
+        task.cancel()
+        let finished = await task.value
+        XCTAssertEqual(finished.tracks.filter { $0.status == .cancelled }.count, 4, "\(finished.tracks.map(\.status))")
+        XCTAssertLessThanOrEqual(runner.calls.count, 2)
+        XCTAssertEqual(try store.loadAll().first?.tracks.map(\.status), finished.tracks.map(\.status))
+    }
+
+    func testDownloadAllRunsAnalyzerAfterDownload() async throws {
+        let runner = FakeRunner()
+        runner.fallback = { call in
+            let stem = call.arguments[call.arguments.firstIndex(of: "-o")! + 1].replacingOccurrences(of: ".%(ext)s", with: ".mp3")
+            return .ok(stem + "\n")
+        }
+        let store = JobStore(root: root)
+        var job = Job(name: "set", kind: .pasteList, tracks: [Track(index: 1, query: "A - B")])
+        _ = try store.directory(for: &job)
+        let analyzed = LineCollector()
+        let seen = LineCollector()
+        let downloader = Downloader(runner: runner, locator: locator, analyzer: { url in
+            analyzed.append(url.lastPathComponent)
+            return TrackAnalysis(bpm: 128, camelot: "8A", keyName: "A minor")
+        })
+        let finished = await downloader.downloadAll(job: job, store: store) { track in
+            seen.append("\(track.status.rawValue):\(track.activity ?? "-")")
+        }
+        XCTAssertEqual(analyzed.lines, ["01 - A - B.mp3"])
+        XCTAssertEqual(finished.tracks[0].bpm, 128)
+        XCTAssertEqual(finished.tracks[0].key, "8A")
+        XCTAssertEqual(finished.tracks[0].keyName, "A minor")
+        XCTAssertTrue(seen.lines.contains("analyzing:Analysing BPM and key"), "\(seen.lines)")
+    }
+
     func testLiveDownloadOneTrack() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["SETLIST_LIVE"] == "1", "set SETLIST_LIVE=1 to run")
         let repoBin = URL(fileURLWithPath: #filePath)

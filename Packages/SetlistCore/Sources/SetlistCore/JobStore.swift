@@ -33,17 +33,48 @@ public struct JobStore: Sendable {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             return dir
         }
-        let base = Self.sanitizeFileName(job.name)
-        var candidate = base
-        var n = 2
-        while isTaken(candidate, by: job.id) {
-            candidate = "\(base) \(n)"
-            n += 1
-        }
+        let candidate = availableDirectoryName(for: job.name, excluding: job.id)
         job.directoryName = candidate
         let dir = root.appendingPathComponent(candidate, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// Renames the job. With `moveFolder` (the default) the folder is renamed to match right away;
+    /// pass false while files are still being written and call `syncDirectory` afterwards.
+    public func rename(_ job: inout Job, to newName: String, moveFolder: Bool = true) throws {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != job.name else { return }
+        _ = try directory(for: &job)
+        job.name = name
+        if moveFolder {
+            try syncDirectory(&job)
+        } else {
+            try save(job)
+        }
+    }
+
+    /// Moves the job's folder so it matches the job's name, if it does not already.
+    public func syncDirectory(_ job: inout Job) throws {
+        let oldDir = try directory(for: &job)
+        let newDirName = availableDirectoryName(for: job.name, excluding: job.id)
+        if newDirName != job.directoryName {
+            let newDir = root.appendingPathComponent(newDirName, isDirectory: true)
+            try FileManager.default.moveItem(at: oldDir, to: newDir)
+            job.directoryName = newDirName
+        }
+        try save(job)
+    }
+
+    private func availableDirectoryName(for name: String, excluding id: UUID) -> String {
+        let base = Self.sanitizeFileName(name)
+        var candidate = base
+        var n = 2
+        while isTaken(candidate, by: id) {
+            candidate = "\(base) \(n)"
+            n += 1
+        }
+        return candidate
     }
 
     private func isTaken(_ name: String, by id: UUID) -> Bool {

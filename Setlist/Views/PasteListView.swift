@@ -27,28 +27,24 @@ struct PasteListView: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
-
-            HStack {
-                TextField("Job name", text: $model.draftName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 320)
-                Button("Parse") { model.parseDraft() }
-                    .disabled(model.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .keyboardShortcut(.return, modifiers: .command)
-                Spacer()
-            }
+                .onChange(of: model.draftText) { _, _ in model.parseDraft() }
 
             if !model.draftTracks.isEmpty {
+                Text("\(model.draftTracks.count) tracks found. Fix any line below before downloading.")
+                    .foregroundStyle(.secondary)
                 TrackTableView(tracks: $model.draftTracks, detailed: false)
                     .frame(minHeight: 200)
                 HStack {
-                    Text("\(model.draftTracks.count) tracks")
-                        .foregroundStyle(.secondary)
+                    Text("Folder name")
+                    TextField(AppModel.defaultName("Text"), text: $model.draftName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 300)
                     Spacer()
                     Button("Download \(model.draftTracks.count) tracks") {
                         model.startPasteListJob()
                     }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: .command)
                     .disabled(model.isWorking)
                 }
             } else {

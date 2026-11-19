@@ -35,21 +35,26 @@ struct TrackTableView: View {
                 .tableStyle(.inset(alternatesRowBackgrounds: true))
             }
 
-            HStack(spacing: 8) {
-                Button {
-                    let next = (tracks.map(\.index).max() ?? 0) + 1
-                    tracks.append(Track(index: next, query: ""))
-                } label: {
-                    Image(systemName: "plus")
+            HStack {
+                ControlGroup {
+                    Button {
+                        let next = (tracks.map(\.index).max() ?? 0) + 1
+                        tracks.append(Track(index: next, query: ""))
+                    } label: {
+                        Image(systemName: "plus").frame(width: 14, height: 14)
+                    }
+                    .help("Add a row")
+                    Button {
+                        tracks.removeAll { selection.contains($0.id) }
+                        selection.removeAll()
+                        for i in tracks.indices { tracks[i].index = i + 1 }
+                    } label: {
+                        Image(systemName: "minus").frame(width: 14, height: 14)
+                    }
+                    .disabled(selection.isEmpty)
+                    .help("Remove selected rows")
                 }
-                Button {
-                    tracks.removeAll { selection.contains($0.id) }
-                    selection.removeAll()
-                    for i in tracks.indices { tracks[i].index = i + 1 }
-                } label: {
-                    Image(systemName: "minus")
-                }
-                .disabled(selection.isEmpty)
+                .fixedSize()
                 Spacer()
             }
             .controlSize(.small)

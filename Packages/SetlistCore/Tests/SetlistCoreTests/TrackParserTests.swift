@@ -96,6 +96,25 @@ final class TrackParserTests: XCTestCase {
         ])
     }
 
+    func testSingleDigitMinutesAndTrailingSpaces() {
+        let text = """
+        0:00 BLANKPINK - GO (House Remix by dijei)
+        1:45 JENNIE & Dua Lipa - Handlebars (House Remix by Swiiim)
+        5:50 Daft Punk - One More Time (Scarmixxed 'Baby' Edit) 
+        24:53 LE SSERAFIM - Eve, Psyche & The Bluebeard's wife (BRLLNT Edit)
+        41:38 Girls' Generation - Gee (Remix by Onion)
+        """
+        let queries = TrackParser.parse(text)
+        XCTAssertEqual(queries, [
+            "BLANKPINK - GO (House Remix by dijei)",
+            "JENNIE & Dua Lipa - Handlebars (House Remix by Swiiim)",
+            "Daft Punk - One More Time (Scarmixxed 'Baby' Edit)",
+            "LE SSERAFIM - Eve, Psyche & The Bluebeard's wife (BRLLNT Edit)",
+            "Girls' Generation - Gee (Remix by Onion)",
+        ])
+        XCTAssertEqual(TrackParser.findTracklist(in: text)?.map(\.start), [0, 105, 350, 1493, 2498])
+    }
+
     func testFindTracklistOnExample() {
         let found = TrackParser.findTracklist(in: Self.example)
         XCTAssertEqual(found?.count, 22)
