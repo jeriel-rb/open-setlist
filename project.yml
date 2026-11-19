@@ -5,8 +5,8 @@ options:
     macOS: "14.0"
   createIntermediateGroups: true
 configFiles:
-  Debug: Local.xcconfig
-  Release: Local.xcconfig
+  Debug: Config.xcconfig
+  Release: Config.xcconfig
 packages:
   SetlistCore:
     path: Packages/SetlistCore

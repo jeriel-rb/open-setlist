@@ -1,0 +1,4 @@
+// Build settings shared by every configuration.
+// Machine-specific values (your Apple Developer team) go in Local.xcconfig, which is git-ignored and optional:
+// copy Local.xcconfig.example to Local.xcconfig to set them.
+#include? "Local.xcconfig"
