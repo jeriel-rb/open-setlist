@@ -69,14 +69,10 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
         self.status = .pending
     }
 
-    /// yt-dlp output template stem without extension: `NN - <query>` or `NN - %(title).120B` for URLs.
-    /// A literal `%` in the query is doubled so yt-dlp does not read it as a template field.
+    /// The file name stem in the standard format, `NN - Artist - Title`. Downloads use
+    /// `DownloadOptions.fileNameFormat`, which the user can change.
     public var fileStem: String {
-        let prefix = String(format: "%02d - ", index)
-        if TrackParser.isURL(query) {
-            return prefix + "%(title).120B"
-        }
-        return prefix + JobStore.sanitizeFileName(query).replacingOccurrences(of: "%", with: "%%")
+        FileNameFormat.standard.stem(index: index, query: query)
     }
 }
 

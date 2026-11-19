@@ -79,6 +79,10 @@ final class AppModel {
     var keepOriginalMix: Bool {
         didSet { defaults.set(keepOriginalMix, forKey: Keys.keepOriginalMix) }
     }
+    /// How downloaded files are named. Applies to downloads started after a change.
+    var fileNameFormat: FileNameFormat {
+        didSet { defaults.set(try? JSONEncoder().encode(fileNameFormat), forKey: Keys.fileNameFormat) }
+    }
     var appearance: AppAppearance {
         didSet {
             defaults.set(appearance.rawValue, forKey: Keys.appearance)
@@ -97,6 +101,7 @@ final class AppModel {
         static let audioQuality = "audioQuality"
         static let keepOriginalMix = "keepOriginalMix"
         static let appearance = "appearance"
+        static let fileNameFormat = "fileNameFormat"
     }
 
     /// yt-dlp is killed if it prints nothing for this long, so one dead connection cannot hang a job.
@@ -114,6 +119,8 @@ final class AppModel {
         self.audioQuality = defaults.string(forKey: Keys.audioQuality) ?? "0"
         self.keepOriginalMix = defaults.bool(forKey: Keys.keepOriginalMix)
         self.appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .system
+        self.fileNameFormat = defaults.data(forKey: Keys.fileNameFormat)
+            .flatMap { try? JSONDecoder().decode(FileNameFormat.self, from: $0) } ?? .standard
         try? FileManager.default.removeItem(at: Self.legacyWorkRoot)
         reloadJobs()
     }
@@ -127,6 +134,7 @@ final class AppModel {
     var downloader: Downloader {
         var options = DownloadOptions()
         options.quality = audioQuality
+        options.fileNameFormat = fileNameFormat
         let ffmpeg = FFmpeg(runner: runner, locator: locator)
         return Downloader(runner: runner, locator: locator, options: options) { url in
             // CPU-heavy, so keep it off the cooperative pool's main lanes.

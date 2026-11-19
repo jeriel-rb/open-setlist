@@ -5,6 +5,8 @@ public struct DownloadOptions: Sendable {
     public var quality: String = "0"
     /// Tracks downloaded at the same time.
     public var concurrency: Int = 2
+    /// How the downloaded files are named.
+    public var fileNameFormat: FileNameFormat = .standard
 
     public init() {}
 }
@@ -85,7 +87,8 @@ public struct Downloader: Sendable {
             return .failure(.allSourcesFailed(lastStderr: error.localizedDescription))
         }
 
-        let template = dir.appendingPathComponent(track.fileStem + ".%(ext)s").path
+        let stem = options.fileNameFormat.stem(index: track.index, query: track.query)
+        let template = dir.appendingPathComponent(stem + ".%(ext)s").path
         var lastStderr = ""
         for target in Self.targets(for: track.query) {
             if Task.isCancelled { return .failure(.cancelled) }

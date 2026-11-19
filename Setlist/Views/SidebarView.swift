@@ -44,6 +44,20 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .help("Theme, file names, download folder and more (⌘,)")
+            }
+        }
         .onDeleteCommand {
             if case let .job(id) = model.selection, let job = model.job(id: id), !model.isRunning(job) {
                 jobToTrash = job
