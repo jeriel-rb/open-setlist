@@ -172,17 +172,36 @@ public struct LinkResolver: Sendable {
         }
     }
 
-    /// Resolves every non-empty line, in order. Lines that fail resolution are reported, not fatal.
-    public func resolveAll(_ text: String) async -> (queries: [String], failures: [(line: String, error: String)]) {
+    /// Resolves every non-empty line, `concurrency` at a time, keeping the pasted order.
+    /// Lines that fail resolution are reported, not fatal.
+    public func resolveAll(_ text: String, concurrency: Int = 4) async -> (queries: [String], failures: [(line: String, error: String)]) {
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        var results = [Result<[String], Swift.Error>?](repeating: nil, count: lines.count)
+        await withTaskGroup(of: (Int, Result<[String], Swift.Error>).self) { group in
+            var next = 0
+            func launch() {
+                let i = next
+                next += 1
+                group.addTask {
+                    do { return (i, .success(try await resolve(lines[i]))) } catch { return (i, .failure(error)) }
+                }
+            }
+            while next < min(max(1, concurrency), lines.count) { launch() }
+            for await (i, result) in group {
+                results[i] = result
+                if next < lines.count { launch() }
+            }
+        }
+
         var queries: [String] = []
         var failures: [(String, String)] = []
-        for raw in text.components(separatedBy: .newlines) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty else { continue }
-            do {
-                queries += try await resolve(line)
-            } catch {
-                failures.append((line, error.localizedDescription))
+        for (line, result) in zip(lines, results) {
+            switch result {
+            case let .success(resolved)?: queries += resolved
+            case let .failure(error)?: failures.append((line, error.localizedDescription))
+            case nil: break
             }
         }
         return (queries, failures)

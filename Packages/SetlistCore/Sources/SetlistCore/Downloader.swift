@@ -32,14 +32,18 @@ public struct Downloader: Sendable {
         self.analyzer = analyzer
     }
 
+    /// 0…1 from a yt-dlp `[download]  45.2% of …` progress line, nil for any other line.
+    public static func downloadFraction(in line: String) -> Double? {
+        guard line.hasPrefix("[download]"),
+              let range = line.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression),
+              let percent = Double(line[range].dropLast()) else { return nil }
+        return min(max(percent / 100, 0), 1)
+    }
+
     /// A short, human-readable description of a yt-dlp output line, or nil for noise.
     public static func activity(for line: String) -> String? {
         if line.hasPrefix("[download]") {
-            if let range = line.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression),
-               let value = Double(line[range].dropLast()) {
-                return "Downloading \(Int(value))%"
-            }
-            return "Downloading"
+            return downloadFraction(in: line).map { "Downloading \(Int($0 * 100))%" } ?? "Downloading"
         }
         if line.hasPrefix("[ExtractAudio]") { return "Converting to MP3" }
         if line.hasPrefix("[Metadata]") || line.hasPrefix("[EmbedThumbnail]") || line.hasPrefix("[ThumbnailsConvertor]") { return "Adding cover and tags" }
@@ -212,10 +216,12 @@ private final class JobState: @unchecked Sendable {
         }
     }
 
-    /// Returns the updated track, or nil when the track is no longer active.
+    /// Returns the updated track, or nil when nothing changed or the track is no longer active.
+    /// yt-dlp prints many progress lines per percent; only a change is worth a UI update.
     func setActivity(_ id: UUID, _ text: String) -> Track? {
         lock.withLock {
-            guard let i = _job.tracks.firstIndex(where: { $0.id == id }), _job.tracks[i].status.isActive else { return nil }
+            guard let i = _job.tracks.firstIndex(where: { $0.id == id }), _job.tracks[i].status.isActive,
+                  _job.tracks[i].activity != text else { return nil }
             _job.tracks[i].activity = text
             if text.hasPrefix("Downloading") || text.hasPrefix("Converting") || text.hasPrefix("Adding") {
                 _job.tracks[i].status = .downloading

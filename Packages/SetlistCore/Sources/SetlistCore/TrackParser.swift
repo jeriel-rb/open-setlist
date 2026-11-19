@@ -14,7 +14,7 @@ public struct ParsedLine: Equatable, Sendable {
 /// Turns pasted text (YouTube descriptions, comments, hand-typed lists) into track queries.
 public enum TrackParser {
     private static let timestamp = try! NSRegularExpression(
-        pattern: #"^\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*[-–—|]?\s*"#)
+        pattern: #"^\s*[\[(]?(\d{1,3}:\d{2}(?::\d{2})?)[\])]?\s*[-–—|]?\s*"#)
     private static let numbering = try! NSRegularExpression(
         pattern: #"^\s*(?:\d{1,3}[.)\]]|[-•*])\s+"#)
     private static let url = try! NSRegularExpression(
@@ -44,7 +44,8 @@ public enum TrackParser {
         var text = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return nil }
         let lower = text.lowercased()
-        if text.count < 40, headerWords.contains(where: { lower.contains($0) }) {
+        // A short line naming the list is a header, unless it reads "Artist - Title".
+        if text.count < 40, !text.contains(" - "), headerWords.contains(where: { lower.contains($0) }) {
             return nil
         }
 

@@ -116,12 +116,15 @@ public struct ProcessRunner: CommandRunning {
         if let idleTimeout {
             watchdogTask = Task.detached {
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(100))
-                    if watchdog.idleSeconds > idleTimeout, process.isRunning {
+                    // Sleep until the earliest moment the timeout could expire instead of polling.
+                    let remaining = idleTimeout - watchdog.idleSeconds
+                    if remaining <= 0 {
+                        guard process.isRunning else { return }
                         watchdog.markTimedOut()
                         process.terminate()
                         return
                     }
+                    try? await Task.sleep(for: .seconds(max(remaining, 0.05)))
                 }
             }
         }
@@ -134,6 +137,8 @@ public struct ProcessRunner: CommandRunning {
                 }
                 do {
                     try process.run()
+                    // Cancelled before the child existed: `onCancel` found nothing to stop, so stop it here.
+                    if Task.isCancelled { process.terminate() }
                 } catch {
                     continuation.resume(throwing: error)
                 }

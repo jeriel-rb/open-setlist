@@ -50,6 +50,15 @@ final class TrackParserTests: XCTestCase {
         XCTAssertNotNil(TrackParser.clean("Some Artist - Playlist Of My Life (Extended Club Mix Edition)"))
     }
 
+    func testKeepsShortSongsThatContainHeaderWords() {
+        XCTAssertEqual(TrackParser.clean("03:10 XG - Playlist")?.query, "XG - Playlist")
+        XCTAssertEqual(TrackParser.clean("Artist - Setlist")?.query, "Artist - Setlist")
+    }
+
+    func testThreeDigitMinutes() {
+        XCTAssertEqual(TrackParser.clean("120:30 A - B"), ParsedLine(start: 7230, query: "A - B"))
+    }
+
     func testKeepsURLs() {
         let url = "https://www.youtube.com/watch?v=abc123&list=PL1"
         XCTAssertEqual(TrackParser.clean("3. \(url)")?.query, url)

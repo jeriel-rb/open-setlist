@@ -36,6 +36,20 @@ final class SetIdentifierTests: XCTestCase {
         XCTAssertEqual(found?.tracks.map(\.query), ["X - Y", "Z - W", "Q - R"])
     }
 
+    func testIgnoresCommentsWhoseTimestampsAreTooDenseToBeSongs() {
+        // A "who sings which line" comment under a single song is not a tracklist.
+        let lines = "0:20 JURIN\n0:31 HARVEY\n0:42 MAYA\n0:55 COCONA\n1:10 CHISA"
+        let info = MixInfo(title: "XG - LEFT RIGHT", description: "", duration: 200, comments: [lines])
+        XCTAssertNil(SetIdentifier.tracksFromText(info))
+    }
+
+    func testPrefersTheLongestCommentTracklist() {
+        let short = "00:00 A - B\n02:00 C - D\n04:00 E - F"
+        let long = short + "\n06:00 G - H\n08:00 I - J"
+        let info = MixInfo(title: "Mix", description: "", duration: 600, comments: [short, long])
+        XCTAssertEqual(SetIdentifier.tracksFromText(info)?.tracks.count, 5)
+    }
+
     func testNoTracklistInTextReturnsNil() {
         let info = MixInfo(title: "Mix", description: "00:00 only one", duration: 300, comments: ["two 01:00 lines", "nope"])
         XCTAssertNil(SetIdentifier.tracksFromText(info))
@@ -83,6 +97,23 @@ final class SetIdentifierTests: XCTestCase {
             XCTAssertEqual((underlying as? URLError)?.code, .networkConnectionLost)
             XCTAssertTrue(error.localizedDescription.contains("ShazamKit"))
         }
+    }
+
+    func testIdentifyStopsWhenCancelled() async throws {
+        let matcher = FakeMatcher(hits: Array(repeating: a, count: 20))
+        let identifier = SetIdentifier(matcher: matcher, delay: .milliseconds(200))
+        let wav = try makeWav(seconds: 600)
+        let task = Task { try await identifier.identify(wav: wav) { _ in } }
+        try await Task.sleep(for: .milliseconds(300))
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("expected CancellationError")
+        } catch is CancellationError {
+        } catch {
+            XCTFail("wrong error \(error)")
+        }
+        XCTAssertLessThan(matcher.callCount, 5)
     }
 
     func testRemixTitlesAreHighConfidence() {

@@ -51,12 +51,22 @@ public struct SetIdentifier: Sendable {
         if let lines = TrackParser.findTracklist(in: info.description) {
             return (toTracks(lines), .description)
         }
-        for comment in info.comments {
-            if let lines = TrackParser.findTracklist(in: comment) {
-                return (toTracks(lines), .comments)
-            }
-        }
-        return nil
+        // Comments are noisier than the uploader's own description: take the longest plausible list.
+        let best = info.comments
+            .compactMap { TrackParser.findTracklist(in: $0) }
+            .filter(spansWholeSongs)
+            .max { $0.count < $1.count }
+        return best.map { (toTracks($0), .comments) }
+    }
+
+    /// Songs in a mix start a minute or more apart. Timestamps packed closer than this on average are
+    /// something else, such as a "who sings which line" comment under a single song.
+    static let minimumAverageGap: Double = 45
+
+    private static func spansWholeSongs(_ lines: [ParsedLine]) -> Bool {
+        let starts = lines.compactMap(\.start)
+        guard starts.count >= 2, let first = starts.min(), let last = starts.max() else { return false }
+        return (last - first) / Double(starts.count - 1) >= minimumAverageGap
     }
 
     private static func toTracks(_ lines: [ParsedLine]) -> [Track] {
@@ -81,10 +91,13 @@ public struct SetIdentifier: Sendable {
         var failures = 0
         var lastError: Swift.Error?
         for (i, sliceStart) in starts.enumerated() {
+            try Task.checkCancellation()
             let buffer = try reader.buffer(start: sliceStart + windowOffset, length: windowSeconds)
             var hit: Hit?
             do {
                 hit = try await matcher.match(buffer)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 failures += 1
                 lastError = error
@@ -92,7 +105,7 @@ public struct SetIdentifier: Sendable {
             slices.append(SliceMatch(start: sliceStart, hit: hit))
             progress(Double(i + 1) / Double(starts.count))
             if i + 1 < starts.count, delay > .zero {
-                try? await Task.sleep(for: delay)
+                try await Task.sleep(for: delay)
             }
         }
         if failures == starts.count, let lastError {

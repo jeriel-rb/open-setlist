@@ -26,6 +26,26 @@ final class JobStoreTests: XCTestCase {
         XCTAssertEqual(JobStore.sanitizeFileName("  two   spaces  "), "two spaces")
     }
 
+    func testSanitizeLimitsBytesNotCharacters() {
+        // 150 Hangul syllables are 450 UTF-8 bytes, over the 255-byte file name limit.
+        let name = JobStore.sanitizeFileName(String(repeating: "허", count: 150))
+        XCTAssertLessThanOrEqual(name.utf8.count, JobStore.maxFileNameBytes)
+        XCTAssertFalse(name.isEmpty)
+        XCTAssertTrue(name.allSatisfy { $0 == "허" }, "must cut on a character boundary")
+    }
+
+    func testSanitizeNeverYieldsDotNames() {
+        XCTAssertEqual(JobStore.sanitizeFileName(".."), "untitled")
+        XCTAssertEqual(JobStore.sanitizeFileName("."), "untitled")
+        XCTAssertEqual(JobStore.sanitizeFileName(".hidden mix"), "hidden mix")
+        XCTAssertEqual(JobStore.sanitizeFileName("Vol. 2"), "Vol. 2")
+    }
+
+    func testFileStemEscapesTemplatePercent() {
+        // yt-dlp reads % in the output template as a field; a literal one must be doubled.
+        XCTAssertEqual(Track(index: 1, query: "Crystal Waters - 100% Pure Love").fileStem, "01 - Crystal Waters - 100%% Pure Love")
+    }
+
     func testFileStemFormat() {
         XCTAssertEqual(Track(index: 3, query: "XG / LEFT RIGHT").fileStem, "03 - XG - LEFT RIGHT")
         XCTAssertEqual(Track(index: 12, query: "https://youtu.be/abc").fileStem, "12 - %(title).120B")

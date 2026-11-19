@@ -14,14 +14,21 @@ public struct JobStore: Sendable {
         self.root = root
     }
 
-    /// Makes a string safe as a single path component.
+    /// File names are capped well under the 255-byte limit, leaving room for the `NN - ` prefix and
+    /// yt-dlp's temporary extensions (`.f251.webm.part`).
+    public static let maxFileNameBytes = 180
+
+    /// Makes a string safe as a single path component: no separators, no leading dot (hidden files,
+    /// `.` and `..`), at most 150 characters and `maxFileNameBytes` UTF-8 bytes.
     public static func sanitizeFileName(_ s: String) -> String {
         let forbidden: Set<Character> = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"]
         let replaced = String(s.map { forbidden.contains($0) ? "-" : $0 })
         let collapsed = replaced
             .split(whereSeparator: \.isWhitespace)
             .joined(separator: " ")
-        let trimmed = String(collapsed.prefix(150)).trimmingCharacters(in: .whitespaces)
+        var name = Substring(collapsed.drop { $0 == "." || $0 == " " }.prefix(150))
+        while name.utf8.count > maxFileNameBytes { name.removeLast() }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
         return trimmed.isEmpty ? "untitled" : trimmed
     }
 

@@ -119,4 +119,24 @@ final class LinkResolverTests: XCTestCase {
         let resolved = try await resolver.resolve("XG - LEFT RIGHT")
         XCTAssertEqual(resolved, ["XG - LEFT RIGHT"])
     }
+
+    func testResolveAllKeepsPastedOrderAndReportsFailures() async throws {
+        // The first link answers last, so a result ordered by completion would come back reversed.
+        let resolver = LinkResolver(runner: FakeRunner(), locator: try TestTools.locator(), fetch: { url in
+            let id = url.lastPathComponent
+            if id == "bad" { return "<html></html>" }
+            try await Task.sleep(for: .milliseconds(id == "slow" ? 300 : 10))
+            return "<meta property=\"og:title\" content=\"\(id)\"/><meta property=\"og:description\" content=\"Artist · x\"/>"
+        })
+        let text = """
+        https://open.spotify.com/track/slow
+
+        https://open.spotify.com/track/bad
+        https://open.spotify.com/track/fast
+        Some - Text
+        """
+        let (queries, failures) = await resolver.resolveAll(text)
+        XCTAssertEqual(queries, ["Artist - slow", "Artist - fast", "Some - Text"])
+        XCTAssertEqual(failures.map(\.line), ["https://open.spotify.com/track/bad"])
+    }
 }

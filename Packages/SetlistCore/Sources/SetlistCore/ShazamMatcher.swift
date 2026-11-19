@@ -14,7 +14,7 @@ public struct ShazamMatcher: SliceMatching {
     public func match(_ buffer: AVAudioPCMBuffer) async throws -> Hit? {
         let generator = SHSignatureGenerator()
         try generator.append(buffer, at: nil)
-        let signature = try generator.signature()
+        let signature = generator.signature()
 
         let session = SHSession()
         let result = await session.result(from: signature)

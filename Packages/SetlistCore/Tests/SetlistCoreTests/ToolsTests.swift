@@ -95,6 +95,19 @@ final class ToolsTests: XCTestCase {
         XCTAssertNotEqual(result?.exitCode, 0)
     }
 
+    func testProcessRunnerDoesNotRunWhenAlreadyCancelled() async throws {
+        let runner = ProcessRunner()
+        let started = Date()
+        let task = Task {
+            // Cancelled before the child is spawned: it must not be left running to completion.
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await runner.run(URL(fileURLWithPath: "/bin/sleep"), arguments: ["10"], onLine: nil)
+        }
+        let result = try? await task.value
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertNotEqual(result?.exitCode, 0)
+    }
+
     func testProcessRunnerKillsSilentProcessAfterIdleTimeout() async throws {
         let runner = ProcessRunner(idleTimeout: 0.5)
         let started = Date()

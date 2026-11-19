@@ -70,12 +70,13 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
     }
 
     /// yt-dlp output template stem without extension: `NN - <query>` or `NN - %(title).120B` for URLs.
+    /// A literal `%` in the query is doubled so yt-dlp does not read it as a template field.
     public var fileStem: String {
         let prefix = String(format: "%02d - ", index)
         if TrackParser.isURL(query) {
             return prefix + "%(title).120B"
         }
-        return prefix + JobStore.sanitizeFileName(query)
+        return prefix + JobStore.sanitizeFileName(query).replacingOccurrences(of: "%", with: "%%")
     }
 }
 

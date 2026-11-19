@@ -116,6 +116,13 @@ final class DownloaderTests: XCTestCase {
         XCTAssertNil(Downloader.activity(for: "random noise"))
     }
 
+    func testDownloadFraction() {
+        XCTAssertEqual(Downloader.downloadFraction(in: "[download]  45.2% of 3.1MiB at 1MiB/s"), 0.452)
+        XCTAssertEqual(Downloader.downloadFraction(in: "[download] 100% of 3.1MiB"), 1)
+        XCTAssertNil(Downloader.downloadFraction(in: "[download] Destination: a.webm"))
+        XCTAssertNil(Downloader.downloadFraction(in: "[ExtractAudio] 50% done"))
+    }
+
     func testDownloadAllReportsActivityPerTrack() async throws {
         let runner = FakeRunner()
         runner.streamed = [0: ["[youtube:search] q: Downloading", "[download]  50.0% of 1MiB", "[ExtractAudio] Destination: x.mp3", "\(root.path)/set/01 - A - B.mp3"]]
@@ -133,6 +140,22 @@ final class DownloaderTests: XCTestCase {
         XCTAssertTrue(seen.lines.contains("Searching YouTube"), "\(seen.lines)")
         XCTAssertTrue(seen.lines.contains("Downloading 50%"), "\(seen.lines)")
         XCTAssertTrue(seen.lines.contains("Converting to MP3"), "\(seen.lines)")
+    }
+
+    func testRepeatedProgressLineIsReportedOnce() async throws {
+        let runner = FakeRunner()
+        runner.streamed = [0: ["[download]  50.0% of 1MiB", "[download]  50.4% of 1MiB", "[download]  50.9% of 1MiB", "[download]  51.0% of 1MiB"]]
+        let path = "\(root.path)/set/01 - A - B.mp3"
+        runner.fallback = { _ in .ok(path + "\n") }
+        let store = JobStore(root: root)
+        var job = Job(name: "set", kind: .pasteList, tracks: [Track(index: 1, query: "A - B")])
+        _ = try store.directory(for: &job)
+        let seen = LineCollector()
+        _ = await Downloader(runner: runner, locator: locator).downloadAll(job: job, store: store) { track in
+            seen.append(track.activity ?? "-")
+        }
+        XCTAssertEqual(seen.lines.filter { $0 == "Downloading 50%" }.count, 1, "\(seen.lines)")
+        XCTAssertEqual(seen.lines.filter { $0 == "Downloading 51%" }.count, 1, "\(seen.lines)")
     }
 
     func testDownloadAllCancellationMarksRemainingTracks() async throws {
