@@ -12,7 +12,7 @@ struct LinkView: View {
 
             PlaceholderTextEditor(text: $model.linkText,
                                   placeholder: "https://open.spotify.com/track/…\nhttps://youtu.be/…\nhttps://soundcloud.com/…")
-                .frame(minHeight: 120)
+                .frame(minHeight: 100)
 
             HStack {
                 Button {
@@ -44,13 +44,13 @@ struct LinkView: View {
                 }
             }
 
-            if !model.linkTracks.isEmpty {
-                TrackTableView(tracks: $model.linkTracks, detailed: false)
-                    .frame(minHeight: 200)
-                DownloadBar(namePlaceholder: AppModel.defaultName("Links"), name: $model.linkName,
-                            count: model.linkTracks.count) {
-                    model.startLinkJob()
-                }
+            TrackTableView(tracks: $model.linkTracks, detailed: false)
+                .frame(minHeight: 160)
+            DownloadBar(namePlaceholder: AppModel.defaultName("Links"), name: $model.linkName,
+                        count: model.linkTracks.filter { !$0.query.trimmingCharacters(in: .whitespaces).isEmpty }.count,
+                        // Spotify links come back as song names, which are then searched for.
+                        searches: model.linkTracks.contains { !TrackParser.isURL($0.query) }) {
+                model.startLinkJob()
             }
         }
         // Fill the pane from the top, so every screen keeps the same 20 pt margin on all four sides.

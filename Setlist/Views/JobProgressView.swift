@@ -6,6 +6,7 @@ struct JobProgressView: View {
     @Environment(Player.self) private var player
     let job: Job
     @State private var selectedTrack: Track.ID?
+    @State private var renamingFiles = false
     /// Click a column header to sort by it; click again to reverse.
     @State private var sortOrder = [KeyPathComparator(\Track.index)]
     @State private var title = ""
@@ -73,6 +74,14 @@ struct JobProgressView: View {
                         Label("Retry \(job.retryableCount)", systemImage: "arrow.clockwise")
                     }
                     .help("Download the failed and cancelled tracks again.")
+                }
+                if !running, job.tracks.contains(where: { $0.status == .done }) {
+                    Button {
+                        renamingFiles = true
+                    } label: {
+                        Label("Rename Files…", systemImage: "character.cursor.ibeam")
+                    }
+                    .help("Change how the files in this folder are named.")
                 }
                 Button {
                     model.revealInFinder(job)
@@ -154,6 +163,9 @@ struct JobProgressView: View {
         .contentShape(Rectangle())
         .onTapGesture { titleFocused = false }
         .navigationTitle(job.name)
+        .sheet(isPresented: $renamingFiles) {
+            RenameFilesSheet(job: job)
+        }
         .onAppear { title = job.name }
         .onChange(of: job.name) { _, new in if !titleFocused { title = new } }
     }
@@ -186,6 +198,41 @@ struct JobProgressView: View {
         if cancelled > 0 { parts.append("\(cancelled) cancelled") }
         if let dir = model.directory(of: job) { parts.append(dir.tildePath) }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Pick a new name format for the files one job has already downloaded.
+struct RenameFilesSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let job: Job
+    @State private var format = FileNameFormat.standard
+
+    private var fileCount: Int { job.tracks.filter { $0.status == .done }.count }
+    private var current: FileNameFormat { job.fileNameFormat ?? .standard }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                FileNameSettings(format: $format, title: "Rename the files in “\(job.name)”",
+                                 note: "Only this folder changes; other jobs and new downloads keep the format from Settings.")
+            }
+            .formStyle(.grouped)
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(fileCount == 1 ? "Rename 1 File" : "Rename \(fileCount) Files") {
+                    model.renameFiles(of: job, to: format)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(format == current)
+            }
+            .padding(16)
+        }
+        .frame(width: 500)
+        .onAppear { format = current }
     }
 }
 

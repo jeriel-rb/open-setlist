@@ -28,7 +28,8 @@ struct SettingsView: View {
                     Text("YouTube Set only. The whole mix is downloaded so Shazam can listen to it, then deleted. Turn this on to keep it in the job folder as one long file, “original mix.wav”.")
                 }
             }
-            FileNameSettings(format: $model.fileNameFormat)
+            FileNameSettings(format: $model.fileNameFormat, title: "File names",
+                             note: "Used for downloads you start from now on. To change files you already have, open the job and choose Rename Files.")
             Section("Appearance") {
                 Picker("Theme", selection: $model.appearance) {
                     ForEach(AppAppearance.allCases) { Text($0.label).tag($0) }
@@ -63,8 +64,11 @@ struct SettingsView: View {
 }
 
 /// Lets you build the file name from parts, without knowing any template syntax.
-private struct FileNameSettings: View {
+struct FileNameSettings: View {
     @Binding var format: FileNameFormat
+    let title: String
+    /// What the choice applies to, shown under the controls.
+    let note: String
 
     private static let separators: [(label: String, value: String)] = [
         ("Dash ( - )", " - "), ("Underscore ( _ )", "_"), ("Dot ( . )", ". "), ("Space", " "),
@@ -118,10 +122,10 @@ private struct FileNameSettings: View {
                 Button("Reset to default") { format = .standard }
             }
         } header: {
-            Text("File names")
+            Text(title)
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Tick the parts you want. The arrow moves a part one place to the right, and the last one back to the front. Used for downloads you start from now on; files you already have keep their names.")
+                Text("Tick the parts you want. The arrow moves a part one place to the right, and the last one back to the front. \(note)")
                 if format.canCollide {
                     Label("Without the number, two songs with the same name are saved as one file.", systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)

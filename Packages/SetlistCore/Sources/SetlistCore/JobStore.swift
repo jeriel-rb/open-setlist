@@ -149,3 +149,67 @@ public struct JobStore: Sendable {
         return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
     }
 }
+
+public extension JobStore {
+    /// Renames the job's downloaded files to `format` and remembers it on the job. Files that are missing
+    /// are left alone. When two songs would get the same name, the later ones get " (2)", " (3)", ….
+    /// Returns how many files were renamed.
+    @discardableResult
+    func renameFiles(of job: inout Job, to format: FileNameFormat) throws -> Int {
+        let dir = try directory(for: &job)
+        let fm = FileManager.default
+        let old = job.fileNameFormat ?? .standard
+
+        struct Move { let track: Int; let from: URL; var to: URL }
+        var moves: [Move] = []
+        var taken = Set<String>()
+        for i in job.tracks.indices {
+            guard job.tracks[i].status == .done, let saved = job.tracks[i].outputPath else { continue }
+            let from = dir.appendingPathComponent(URL(fileURLWithPath: saved).lastPathComponent)
+            guard fm.fileExists(atPath: from.path) else { continue }
+            let track = job.tracks[i]
+            // A link's song name is not in the job; it is in the file name the old format produced.
+            let currentStem = from.deletingPathExtension().lastPathComponent
+            let text: String
+            if TrackParser.isURL(track.query) {
+                text = track.songName ?? old.linkTitle(inFileName: currentStem, index: track.index) ?? currentStem
+                job.tracks[i].songName = text
+            } else {
+                text = track.query
+            }
+            let base = format.fileName(index: track.index, text: text)
+            var name = base
+            var n = 2
+            while !taken.insert(name.lowercased()).inserted {
+                name = "\(base) (\(n))"
+                n += 1
+            }
+            moves.append(Move(track: i, from: from, to: dir.appendingPathComponent(name).appendingPathExtension(from.pathExtension)))
+        }
+
+        // Two steps, through temporary names, so "01 - A" → "02 - A" cannot land on a file that is itself about to move.
+        let sources = Set(moves.map { $0.from.standardizedFileURL.path.lowercased() })
+        let token = UUID().uuidString
+        var staged: [(Move, URL)] = []
+        for (n, move) in moves.enumerated() where move.from.lastPathComponent != move.to.lastPathComponent {
+            // Never overwrite a file that is not part of this rename.
+            var move = move
+            var k = 2
+            let stem = move.to.deletingPathExtension().lastPathComponent
+            while fm.fileExists(atPath: move.to.path), !sources.contains(move.to.standardizedFileURL.path.lowercased()) {
+                move.to = dir.appendingPathComponent("\(stem) (\(k))").appendingPathExtension(move.from.pathExtension)
+                k += 1
+            }
+            let temp = dir.appendingPathComponent(".renaming-\(token)-\(n)")
+            try fm.moveItem(at: move.from, to: temp)
+            staged.append((move, temp))
+        }
+        for (move, temp) in staged {
+            try fm.moveItem(at: temp, to: move.to)
+            job.tracks[move.track].outputPath = move.to.path
+        }
+        job.fileNameFormat = format
+        try save(job)
+        return staged.count
+    }
+}

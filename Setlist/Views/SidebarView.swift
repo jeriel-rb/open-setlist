@@ -72,15 +72,5 @@ struct SidebarView: View {
         } message: { job in
             Text("The folder \(model.directory(of: job)?.tildePath ?? job.name) and the songs in it go to the Trash. You can put them back from there.")
         }
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    model.reloadJobs()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .help("Reload history from disk")
-            }
-        }
     }
 }

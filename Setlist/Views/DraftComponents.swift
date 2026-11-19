@@ -54,7 +54,18 @@ struct DownloadBar: View {
     @Binding var name: String
     /// Tracks the button will download.
     let count: Int
+    /// True when at least one track is a song name that has to be searched for, not a direct link.
+    var searches = true
     let action: () -> Void
+
+    private var buttonTitle: String {
+        let verb = searches ? "Find & Download" : "Download"
+        switch count {
+        case 0: return "\(verb) Tracks"
+        case 1: return "\(verb) 1 Track"
+        default: return "\(verb) \(count) Tracks"
+        }
+    }
 
     var body: some View {
         HStack {
@@ -63,11 +74,12 @@ struct DownloadBar: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 300)
             Spacer()
-            Button(count == 1 ? "Download 1 track" : "Download \(count) tracks", action: action)
+            Button(buttonTitle, action: action)
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model.isWorking || count == 0)
-                .help(model.isWorking ? "Another download is still running." : "")
+                .help(model.isWorking ? "Another download is still running."
+                      : searches ? "Each song is searched for on YouTube, then SoundCloud, and downloaded as an MP3." : "")
         }
     }
 }

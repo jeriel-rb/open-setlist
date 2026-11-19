@@ -59,6 +59,9 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
     /// Camelot code, e.g. "8A".
     public var key: String?
     public var keyName: String?
+    /// For a track given as a link: the song as "Artist - Title", taken from the downloaded file's name
+    /// the first time the files are renamed, so later renames do not have to guess it again.
+    public var songName: String?
 
     public init(index: Int, query: String, start: Double? = nil, confidence: Confidence = .high) {
         self.id = UUID()
@@ -96,6 +99,8 @@ public struct Job: Codable, Equatable, Identifiable, Sendable {
     public var directoryName: String?
     /// Identification checkpoint of a YouTube Set whose songs are found by listening to the mix.
     public var mix: MixState?
+    /// How this job's files are named. nil means the standard `01 - Artist - Title`.
+    public var fileNameFormat: FileNameFormat?
 
     public init(name: String, kind: JobKind, sourceURL: URL? = nil, tracks: [Track]) {
         self.id = UUID()

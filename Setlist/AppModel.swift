@@ -133,10 +133,12 @@ final class AppModel {
 
     var store: JobStore { JobStore(root: outputRoot) }
 
-    var downloader: Downloader {
+    /// A downloader that names files the way `job` does: its own format once it has one (so a retry
+    /// matches the files already there), otherwise the one from Settings.
+    func downloader(for job: Job) -> Downloader {
         var options = DownloadOptions()
         options.quality = audioQuality
-        options.fileNameFormat = fileNameFormat
+        options.fileNameFormat = job.fileNameFormat ?? fileNameFormat
         let ffmpeg = FFmpeg(runner: runner, locator: locator)
         return Downloader(runner: runner, locator: locator, options: options) { url in
             // CPU-heavy, so keep it off the cooperative pool's main lanes.
@@ -313,9 +315,9 @@ final class AppModel {
     }
 
     /// Listens to a mix and downloads its songs as they are found, continuing from the job's checkpoint.
-    private var setRunner: SetRunner {
+    private func setRunner(for job: Job) -> SetRunner {
         var runner = SetRunner(fetcher: MixFetcher(runner: self.runner, locator: locator), matcher: matcher,
-                               downloader: downloader, store: store)
+                               downloader: downloader(for: job), store: store)
         runner.keepMix = keepOriginalMix
         runner.preflight = shazamPreflight
         return runner
@@ -348,6 +350,8 @@ final class AppModel {
     @discardableResult
     func run(_ job: Job) -> Job? {
         var job = job
+        // Fixed at the start, so changing Settings mid-download cannot give one folder two naming styles.
+        if job.fileNameFormat == nil { job.fileNameFormat = fileNameFormat }
         do {
             _ = try store.directory(for: &job)
             try store.save(job)
@@ -393,9 +397,9 @@ final class AppModel {
     /// Downloads the pending tracks of a job that already exists in `jobs` and on disk.
     private func resume(_ job: Job) {
         isWorking = true
-        let downloader = downloader
+        let downloader = downloader(for: job)
         let store = store
-        let setRunner = setRunner
+        let setRunner = setRunner(for: job)
         let jobID = job.id
         runningTasks[jobID] = Task {
             var finished: Job
@@ -458,6 +462,20 @@ final class AppModel {
             jobs[i] = updated
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Renames the files a job has already downloaded to a new format, for that job only.
+    func renameFiles(of job: Job, to format: FileNameFormat) {
+        guard !isRunning(job), let i = jobs.firstIndex(where: { $0.id == job.id }) else { return }
+        var updated = jobs[i]
+        do {
+            try store.renameFiles(of: &updated, to: format)
+            jobs[i] = updated
+        } catch {
+            // Some files may already carry their new names; show the folder as it now is.
+            jobs[i] = updated
+            errorMessage = "Could not rename every file: \(error.localizedDescription)"
         }
     }
 

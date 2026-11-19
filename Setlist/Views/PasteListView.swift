@@ -12,18 +12,19 @@ struct PasteListView: View {
 
             PlaceholderTextEditor(text: $model.draftText,
                                   placeholder: "00:00 NewJeans - Right Now (R&B Remix)\n01:30 XG - LEFT RIGHT\n…")
-                .frame(minHeight: 140)
+                .frame(minHeight: 110)
                 .onChange(of: model.draftText) { _, _ in model.parseDraft() }
 
-            if !model.draftTracks.isEmpty {
-                Text("\(model.draftTracks.count == 1 ? "1 track" : "\(model.draftTracks.count) tracks") found. Fix any line below before downloading.")
-                    .foregroundStyle(.secondary)
-                TrackTableView(tracks: $model.draftTracks, detailed: false)
-                    .frame(minHeight: 200)
-                DownloadBar(namePlaceholder: AppModel.defaultName("Text"), name: $model.draftName,
-                            count: model.draftTracks.count) {
-                    model.startPasteListJob()
-                }
+            Text(model.draftTracks.isEmpty
+                 ? "The songs found in your text are listed here."
+                 : "\(model.draftTracks.count == 1 ? "1 track" : "\(model.draftTracks.count) tracks") found. Fix any line below before downloading.")
+                .foregroundStyle(.secondary)
+            TrackTableView(tracks: $model.draftTracks, detailed: false)
+                .frame(minHeight: 160)
+            DownloadBar(namePlaceholder: AppModel.defaultName("Text"), name: $model.draftName,
+                        count: model.draftTracks.filter { !$0.query.trimmingCharacters(in: .whitespaces).isEmpty }.count,
+                        searches: model.draftTracks.isEmpty || model.draftTracks.contains { !TrackParser.isURL($0.query) }) {
+                model.startPasteListJob()
             }
         }
         // Fill the pane from the top, so every screen keeps the same 20 pt margin on all four sides.

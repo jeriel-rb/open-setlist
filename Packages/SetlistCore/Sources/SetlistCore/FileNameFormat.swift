@@ -38,11 +38,10 @@ public struct FileNameFormat: Codable, Equatable, Sendable {
         return (artist, title)
     }
 
-    /// The file name without extension, as a yt-dlp output template: safe as one path component and with
-    /// any literal `%` doubled. For a link, the video's own title stands where artist and title would go.
-    public func stem(index: Int, query: String) -> String {
-        let isLink = TrackParser.isURL(query)
-        let (artist, title) = Self.split(query)
+    /// The name built from `text` ("Artist - Title", or all title), with `linkTitleMarker` standing where a
+    /// link's own title belongs when `isLink` is set. Not yet made safe as a file name.
+    private func assemble(index: Int, text: String, isLink: Bool) -> String {
+        let (artist, title) = Self.split(text)
         var pieces: [String] = []
         var namePlaced = false
         for part in order where included.contains(part) {
@@ -67,9 +66,31 @@ public struct FileNameFormat: Codable, Equatable, Sendable {
         if !namePlaced, included != [.number] {
             pieces.append(isLink ? Self.linkTitleMarker : title)
         }
-        let name = JobStore.sanitizeFileName(prefix + pieces.joined(separator: separator) + suffix)
+        return prefix + pieces.joined(separator: separator) + suffix
+    }
+
+    /// The file name without extension, as a yt-dlp output template: safe as one path component and with
+    /// any literal `%` doubled. For a link, the video's own title stands where artist and title would go.
+    public func stem(index: Int, query: String) -> String {
+        let name = JobStore.sanitizeFileName(assemble(index: index, text: query, isLink: TrackParser.isURL(query)))
         return name.replacingOccurrences(of: "%", with: "%%")
             .replacingOccurrences(of: Self.linkTitleMarker, with: Self.linkTitleField)
+    }
+
+    /// The plain file name (no extension) for a file that already exists. `text` is the song as
+    /// "Artist - Title": the track's own text, or for a link the title its download was saved under.
+    public func fileName(index: Int, text: String) -> String {
+        JobStore.sanitizeFileName(assemble(index: index, text: text, isLink: false))
+    }
+
+    /// For a link downloaded with this format: the video title inside the name it was saved under,
+    /// found by removing whatever this format puts before and after it. nil when the name does not fit.
+    public func linkTitle(inFileName name: String, index: Int) -> String? {
+        let pattern = JobStore.sanitizeFileName(assemble(index: index, text: "", isLink: true))
+        guard let marker = pattern.range(of: Self.linkTitleMarker) else { return nil }
+        let before = String(pattern[..<marker.lowerBound]), after = String(pattern[marker.upperBound...])
+        guard name.hasPrefix(before), name.hasSuffix(after), name.count > before.count + after.count else { return nil }
+        return String(name.dropFirst(before.count).dropLast(after.count))
     }
 
     /// What a file would be called, for showing in Settings.
