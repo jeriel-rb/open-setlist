@@ -24,7 +24,8 @@ struct PasteListView: View {
             DownloadBar(namePlaceholder: AppModel.defaultName("Text"), name: $model.draftName,
                         count: model.readyTracks(model.draftTracks, in: .text).count,
                         skipped: model.skippedCount(model.draftTracks, in: .text),
-                        searches: model.draftTracks.isEmpty || model.draftTracks.contains { !TrackParser.isURL($0.query) }) {
+                        searches: model.draftTracks.isEmpty || model.draftTracks.contains { !TrackParser.isURL($0.query) },
+                        target: $model.draftTarget) {
                 model.startPasteListJob()
             }
         }

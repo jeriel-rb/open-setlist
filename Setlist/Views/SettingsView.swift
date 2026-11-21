@@ -118,8 +118,8 @@ struct FileNameSettings: View {
             .disabled(!format.included.contains(.number))
             TextField("Text before", text: $format.prefix, prompt: Text("Nothing"))
             TextField("Text after", text: $format.suffix, prompt: Text("Nothing"))
-            if format != .standard {
-                Button("Reset to default") { format = .standard }
+            if format != .preferred {
+                Button("Reset to default") { format = .preferred }
             }
         } header: {
             Text(title)

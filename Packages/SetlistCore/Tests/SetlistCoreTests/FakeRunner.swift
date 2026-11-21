@@ -15,6 +15,13 @@ final class FakeRunner: CommandRunning, @unchecked Sendable {
     var fallback: @Sendable (Call) -> CommandResult = { _ in CommandResult(exitCode: 0, stdout: "", stderr: "") }
     /// Lines to stream through `onLine` for each call, matched by call index.
     var streamed: [Int: [String]] = [:]
+    /// Answers the "five results from each site" searches a download starts with, outside the script and
+    /// the recorded calls. The default finds nothing, which sends the download down its plain
+    /// `ytsearch1` / `scsearch1` path. Set to nil to script and record those searches like any call.
+    var searchResult: (@Sendable (Call) -> CommandResult)? = { _ in CommandResult(exitCode: 0, stdout: "", stderr: "") }
+    /// Answers "read this song's or playlist's names" runs the same way: outside the script and the
+    /// recorded calls, finding nothing by default. Set to nil to script and record them.
+    var nameResult: (@Sendable (Call) -> CommandResult)? = { _ in CommandResult(exitCode: 0, stdout: "", stderr: "") }
     /// Simulated run time; cancellation interrupts it like a terminated process would.
     var delay: Duration = .zero
 
@@ -26,6 +33,14 @@ final class FakeRunner: CommandRunning, @unchecked Sendable {
 
     func run(_ executable: URL, arguments: [String], onLine: (@Sendable (String) -> Void)?) async throws -> CommandResult {
         let call = Call(executable: executable.lastPathComponent, arguments: arguments)
+        if let searchResult, let target = arguments.last, target.hasPrefix("ytsearch5:") || target.hasPrefix("scsearch5:") {
+            return searchResult(call)
+        }
+        if let nameResult, arguments.contains("--skip-download") {
+            let result = nameResult(call)
+            if let onLine { result.stdout.split(separator: "\n").forEach { onLine(String($0)) } }
+            return result
+        }
         let (result, index): (CommandResult, Int) = lock.withLock {
             recorded.append(call)
             let idx = recorded.count - 1

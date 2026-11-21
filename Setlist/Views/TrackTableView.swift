@@ -90,11 +90,18 @@ private struct QueryCell: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            TextField("Artist - Title", text: $track.query)
-                .textFieldStyle(.plain)
-                .onChange(of: track.query) { _, new in
-                    if track.confidence == .low, !new.isEmpty { track.confidence = .high }
-                }
+            if TrackParser.isURL(track.query), track.songName != nil {
+                // A link whose song is known: the name is what the file will be called, and can be corrected.
+                TextField("Artist - Title", text: Binding(get: { track.songName ?? "" }, set: { track.songName = $0 }))
+                    .textFieldStyle(.plain)
+                    .help(track.query)
+            } else {
+                TextField("Artist - Title", text: $track.query)
+                    .textFieldStyle(.plain)
+                    .onChange(of: track.query) { _, new in
+                        if track.confidence == .low, !new.isEmpty { track.confidence = .high }
+                    }
+            }
             if let problem {
                 Label(problem, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)

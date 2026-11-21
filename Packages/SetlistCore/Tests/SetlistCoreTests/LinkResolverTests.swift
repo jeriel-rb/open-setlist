@@ -139,4 +139,86 @@ final class LinkResolverTests: XCTestCase {
         XCTAssertEqual(queries, ["Artist - slow", "Artist - fast", "Some - Text"])
         XCTAssertEqual(failures.map(\.line), ["https://open.spotify.com/track/bad"])
     }
+
+    // MARK: Song names of a playlist
+
+    func testSongNameKeepsATitleThatNamesTheArtistAndAddsTheSoundCloudUploaderOtherwise() {
+        let sc = "https://soundcloud.com/u/t"
+        XCTAssertEqual(LinkResolver.songName(title: "A$AP Ferg x Masters At Work - Work (Baile Edit)", uploader: "LAIAN", url: sc),
+                       "A$AP Ferg x Masters At Work - Work (Baile Edit)")
+        XCTAssertEqual(LinkResolver.songName(title: "Mamushi (Caes AfroBaile Edit)", uploader: "C A E S", url: sc),
+                       "C A E S - Mamushi (Caes AfroBaile Edit)")
+        XCTAssertEqual(LinkResolver.songName(title: "Mamushi", uploader: nil, url: sc), "Mamushi")
+        // A YouTube channel is often not the artist ("SomeLabelVEVO"), so it is not put in front.
+        XCTAssertEqual(LinkResolver.songName(title: "Some Song (Official Video)", uploader: "LabelVEVO", url: "https://www.youtube.com/watch?v=a"),
+                       "Some Song (Official Video)")
+    }
+
+    func testSongNameDropsPromotionAndUnusableTitles() {
+        let sc = "https://soundcloud.com/u/t"
+        XCTAssertEqual(LinkResolver.songName(title: "Timeless (Beatter Baile Edit) | #1 FUNK CHART", uploader: "BEATTER", url: sc),
+                       "BEATTER - Timeless (Beatter Baile Edit)")
+        XCTAssertEqual(LinkResolver.songName(title: "Playboi Carti - EVIL JORDAN (DJ Mahks remix) FREE DOWNLOAD", uploader: "DJ Mahks", url: sc),
+                       "Playboi Carti - EVIL JORDAN (DJ Mahks remix)")
+        XCTAssertEqual(LinkResolver.songName(title: "Song [Free DL]", uploader: "U", url: sc), "U - Song")
+        XCTAssertNil(LinkResolver.songName(title: "[Private video]", uploader: "U", url: "https://www.youtube.com/watch?v=a"))
+        XCTAssertNil(LinkResolver.songName(title: nil, uploader: "U", url: sc))
+    }
+
+    func testNameRangesSplitALongPlaylistIntoAFewRuns() {
+        XCTAssertEqual(LinkResolver.nameRanges(count: 0), [])
+        XCTAssertEqual(LinkResolver.nameRanges(count: 7), [1...7])
+        XCTAssertEqual(LinkResolver.nameRanges(count: 25), [1...13, 14...25])
+        XCTAssertEqual(LinkResolver.nameRanges(count: 77), [1...20, 21...40, 41...60, 61...77])
+    }
+
+    func testSoundCloudPlaylistIsReadAgainForNamesAndPageAddresses() async throws {
+        let playlist = "https://soundcloud.com/u/sets/club"
+        let listing = """
+        {"id":"1","url":"https://soundcloud.com/caes/mamushi","title":null,"playlist_title":"Club/Baile"}
+        {"id":"2","url":"https://api-v2.soundcloud.com/tracks/2","title":null,"playlist_title":"Club/Baile"}
+        {"id":"3","url":"https://api-v2.soundcloud.com/tracks/3","title":null,"playlist_title":"Club/Baile"}
+        """
+        let names = """
+        {"id":"2","webpage_url":"https://soundcloud.com/mahks/evil","uploader":"DJ Mahks","title":"Playboi Carti - EVIL JORDAN (remix)"}
+        {"id":"1","webpage_url":"https://soundcloud.com/caes/mamushi","uploader":"C A E S","title":"Mamushi (Caes Edit)"}
+        """
+        let runner = FakeRunner()
+        runner.nameResult = nil
+        runner.fallback = { call in .ok(call.arguments.contains("--flat-playlist") ? listing : names) }
+        let resolver = LinkResolver(runner: runner, locator: try TestTools.locator(), fetch: { _ in "" })
+        let updates = LineCollector()
+        let found = try await resolver.lookUp(playlist) { updates.append($0.entries.map { $0.name ?? "?" }.joined(separator: " | ")) }
+        // The list is shown at once, then again as each name is read.
+        XCTAssertEqual(updates.lines, [
+            "? | ? | ?",
+            "? | Playboi Carti - EVIL JORDAN (remix) | ?",
+            "C A E S - Mamushi (Caes Edit) | Playboi Carti - EVIL JORDAN (remix) | ?",
+        ])
+        XCTAssertEqual(found.title, "Club/Baile")
+        XCTAssertEqual(found.entries, [
+            LinkEntry(query: "https://soundcloud.com/caes/mamushi", name: "C A E S - Mamushi (Caes Edit)"),
+            LinkEntry(query: "https://soundcloud.com/mahks/evil", name: "Playboi Carti - EVIL JORDAN (remix)"),
+            // A song that could not be read stays in the list as its address, so its download reports why.
+            LinkEntry(query: "https://api-v2.soundcloud.com/tracks/3", name: nil),
+        ])
+        XCTAssertEqual(runner.calls.map(\.arguments), [
+            LinkResolver.playlistArguments(url: playlist),
+            LinkResolver.nameArguments(url: playlist, range: 1...3),
+        ])
+    }
+
+    func testYouTubePlaylistNamesComeFromTheListingWithoutASecondRun() async throws {
+        let runner = FakeRunner(results: [.ok("""
+        {"id":"a","url":"https://www.youtube.com/watch?v=a","title":"XG - LEFT RIGHT (Official Video)","channel":"XG","playlist_title":"Mix"}
+        {"id":"b","url":"https://www.youtube.com/watch?v=b","title":"[Private video]","playlist_title":"Mix"}
+        """)])
+        let resolver = LinkResolver(runner: runner, locator: try TestTools.locator(), fetch: { _ in "" })
+        let found = try await resolver.lookUp("https://www.youtube.com/playlist?list=PL1")
+        XCTAssertEqual(found.entries, [
+            LinkEntry(query: "https://www.youtube.com/watch?v=a", name: "XG - LEFT RIGHT (Official Video)"),
+            LinkEntry(query: "https://www.youtube.com/watch?v=b", name: nil),
+        ])
+        XCTAssertEqual(runner.calls.count, 1)
+    }
 }

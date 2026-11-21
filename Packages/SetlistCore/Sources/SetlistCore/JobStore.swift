@@ -130,9 +130,9 @@ public struct JobStore: Sendable {
         let dir = try directory(for: &job)
         let lines = job.tracks.map { track -> String in
             if let start = track.start {
-                return "\(Self.timestamp(start)) \(track.query)"
+                return "\(Self.timestamp(start)) \(track.displayName)"
             }
-            return track.query
+            return track.displayName
         }
         try (lines.joined(separator: "\n") + "\n")
             .write(to: dir.appendingPathComponent("tracklist.txt"), atomically: true, encoding: .utf8)
@@ -181,7 +181,9 @@ public extension JobStore {
             let currentStem = from.deletingPathExtension().lastPathComponent
             let text: String
             if TrackParser.isURL(track.query) {
-                text = track.songName ?? old.linkTitle(inFileName: currentStem, index: track.index) ?? currentStem
+                // A name left blank (the field was emptied before the download) is no name.
+                let known = track.songName.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+                text = known ?? old.linkTitle(inFileName: currentStem, index: track.index) ?? currentStem
                 job.tracks[i].songName = text
             } else {
                 text = track.query
@@ -220,5 +222,92 @@ public extension JobStore {
         job.fileNameFormat = format
         try save(job)
         return staged.count
+    }
+}
+
+public extension JobStore {
+    enum TrackFileError: Swift.Error, Equatable, LocalizedError {
+        case emptyName
+        case nameTaken(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .emptyName: "Type a name first."
+            case let .nameTaken(name): "The folder already has a file called “\(name)”."
+            }
+        }
+    }
+
+    /// The downloaded file of a track in the job's current folder, or nil when it has none or it is gone.
+    private func file(of track: Track, in dir: URL) -> URL? {
+        guard track.status == .done, let saved = track.outputPath else { return nil }
+        let url = dir.appendingPathComponent(URL(fileURLWithPath: saved).lastPathComponent)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    /// Gives one song a new name ("Artist - Title") and renames its file to match, in the job's own
+    /// file-name format. A link keeps its address; a typed song's text becomes the new name.
+    func renameTrack(_ id: Track.ID, in job: inout Job, to newName: String) throws {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw TrackFileError.emptyName }
+        guard let i = job.tracks.firstIndex(where: { $0.id == id }) else { return }
+        let dir = try directory(for: &job)
+        if let from = file(of: job.tracks[i], in: dir) {
+            let format = job.fileNameFormat ?? .standard
+            let to = dir.appendingPathComponent(format.fileName(index: job.tracks[i].index, text: name))
+                .appendingPathExtension(from.pathExtension)
+            if to.lastPathComponent != from.lastPathComponent {
+                // A change of capitals only is the same file on this disk, not a clash.
+                let sameFile = to.lastPathComponent.lowercased() == from.lastPathComponent.lowercased()
+                guard sameFile || !FileManager.default.fileExists(atPath: to.path) else {
+                    throw TrackFileError.nameTaken(to.lastPathComponent)
+                }
+                try FileManager.default.moveItem(at: from, to: to)
+                job.tracks[i].outputPath = to.path
+            }
+        }
+        if TrackParser.isURL(job.tracks[i].query) {
+            job.tracks[i].songName = name
+        } else {
+            job.tracks[i].query = name
+        }
+        try save(job)
+        try? writeTracklist(job)
+    }
+
+    /// Takes one song out of the job. Its file, when it has one, goes to the Trash (or to `discard`,
+    /// which tests use in place of the Trash). The other songs keep their numbers.
+    func deleteTrack(_ id: Track.ID, from job: inout Job, discard: ((URL) throws -> Void)? = nil) throws {
+        guard let i = job.tracks.firstIndex(where: { $0.id == id }) else { return }
+        let dir = try directory(for: &job)
+        if let file = file(of: job.tracks[i], in: dir) {
+            if let discard {
+                try discard(file)
+            } else {
+                try FileManager.default.trashItem(at: file, resultingItemURL: nil)
+            }
+        }
+        job.tracks.remove(at: i)
+        try save(job)
+        try? writeTracklist(job)
+        try? writeFailed(job)
+    }
+
+    /// Dates the job's files in list order, one second apart from when the job was made, so sorting the
+    /// folder by date in Finder (oldest first) shows the songs in the order the app lists them. Downloads
+    /// finish in any order, which leaves the files' own dates meaningless. Returns how many were dated.
+    @discardableResult
+    func stampListOrder(of job: Job) -> Int {
+        var job = job
+        guard let dir = try? directory(for: &job) else { return 0 }
+        var stamped = 0
+        for (position, track) in job.tracks.sorted(by: { $0.index < $1.index }).enumerated() {
+            guard let file = file(of: track, in: dir) else { continue }
+            let date = job.createdAt.addingTimeInterval(Double(position))
+            if (try? FileManager.default.setAttributes([.creationDate: date, .modificationDate: date], ofItemAtPath: file.path)) != nil {
+                stamped += 1
+            }
+        }
+        return stamped
     }
 }

@@ -44,6 +44,70 @@ final class DownloaderTests: XCTestCase {
         XCTAssertTrue(runner.calls[0].arguments.contains("\(root.path)/01 - XG - LEFT RIGHT.%(ext)s"))
     }
 
+    func testSearchesBothSitesAndDownloadsTheBestMatch() async throws {
+        let runner = FakeRunner()
+        runner.searchResult = nil
+        let path = "\(root.path)/01 - A - B (X Remix).mp3"
+        runner.fallback = { call in
+            switch call.arguments.last ?? "" {
+            case "ytsearch5:A - B (X Remix)":
+                return .ok(#"{"title": "A - B (Official Video)", "uploader": "A", "duration": 200, "webpage_url": "https://youtube.com/watch?v=orig"}"# + "\n")
+            case "scsearch5:A - B (X Remix)":
+                return .ok(#"{"title": "A - B (X Remix)", "uploader": "X", "duration": 210, "webpage_url": "https://soundcloud.com/x/a-b-x-remix"}"# + "\n")
+            default:
+                return .ok("https://soundcloud.com/x/a-b-x-remix\n" + path + "\n")
+            }
+        }
+        let seen = LineCollector()
+        let result = await Downloader(runner: runner, locator: locator)
+            .fetch(track: Track(index: 1, query: "A - B (X Remix)"), into: root) { seen.append($0) }
+        XCTAssertEqual(try result.get(), Downloader.Downloaded(file: URL(fileURLWithPath: path), source: "https://soundcloud.com/x/a-b-x-remix"))
+        XCTAssertEqual(runner.calls.count, 3)
+        XCTAssertEqual(Set(runner.calls.prefix(2).compactMap(\.arguments.last)), ["ytsearch5:A - B (X Remix)", "scsearch5:A - B (X Remix)"])
+        XCTAssertTrue(runner.calls[0].arguments.contains("--flat-playlist"))
+        XCTAssertEqual(runner.calls[2].arguments.last, "https://soundcloud.com/x/a-b-x-remix")
+        XCTAssertEqual(seen.lines.first, "Searching YouTube and SoundCloud")
+    }
+
+    func testNextBestMatchIsTriedWhenTheBestFails() async throws {
+        let runner = FakeRunner()
+        runner.searchResult = nil
+        let path = "\(root.path)/01 - A - B.mp3"
+        runner.fallback = { call in
+            switch call.arguments.last ?? "" {
+            case "ytsearch5:A - B":
+                return .ok(#"{"title": "A - B", "webpage_url": "https://youtube.com/watch?v=1"}"# + "\n" + #"{"title": "A - B (Live)", "webpage_url": "https://youtube.com/watch?v=2"}"# + "\n")
+            case "scsearch5:A - B":
+                return .ok(#"{"title": "A - B", "webpage_url": "https://soundcloud.com/a/b"}"# + "\n")
+            case "https://youtube.com/watch?v=1":
+                return .fail("blocked")
+            default:
+                return .ok(path + "\n")
+            }
+        }
+        let result = await Downloader(runner: runner, locator: locator).download(track: Track(index: 1, query: "A - B"), into: root)
+        XCTAssertEqual(try result.get().path, path)
+        XCTAssertEqual(runner.calls.dropFirst(2).compactMap(\.arguments.last), ["https://youtube.com/watch?v=1", "https://soundcloud.com/a/b"])
+    }
+
+    func testLeftoversOfAFailedAttemptAreRemoved() async throws {
+        let runner = FakeRunner(results: [.fail("blocked"), .ok("\(root.path)/01 - A - B.mp3\n")])
+        let fm = FileManager.default
+        // What a failed first attempt leaves behind, next to files that must stay.
+        for name in ["01 - A - B.webp", "01 - A - B.f251.webm.part", "01 - A - B.mp3", "01 - A - B. Part 2.webm.part", "02 - C - D.webp"] {
+            fm.createFile(atPath: root.appendingPathComponent(name).path, contents: Data())
+        }
+        _ = await Downloader(runner: runner, locator: locator).download(track: Track(index: 1, query: "A - B"), into: root)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: root.path).sorted(),
+                       ["01 - A - B. Part 2.webm.part", "01 - A - B.mp3", "02 - C - D.webp"])
+    }
+
+    func testLinksAreNotSearchedFor() async {
+        let runner = FakeRunner()
+        _ = await Downloader(runner: runner, locator: locator).download(track: Track(index: 1, query: "https://youtu.be/abc"), into: root)
+        XCTAssertEqual(runner.calls.compactMap(\.arguments.last), ["https://youtu.be/abc"])
+    }
+
     func testAllSourcesFailedReportsLastStderr() async {
         let runner = FakeRunner(results: [.fail("first"), .fail("second")])
         let downloader = Downloader(runner: runner, locator: locator)
@@ -111,7 +175,7 @@ final class DownloaderTests: XCTestCase {
         XCTAssertEqual(Downloader.activity(for: "[Metadata] Adding metadata to \"/x/01 - a.mp3\""), "Adding cover and tags")
         XCTAssertEqual(Downloader.activity(for: "[EmbedThumbnail] ffmpeg: Adding thumbnail"), "Adding cover and tags")
         XCTAssertEqual(Downloader.activity(for: "[youtube:search] query: Downloading web client config"), "Searching YouTube")
-        XCTAssertEqual(Downloader.activity(for: "[youtube] abc: Downloading webpage"), "Fetching video info")
+        XCTAssertEqual(Downloader.activity(for: "[youtube] abc: Downloading webpage"), "Getting the song's details")
         XCTAssertEqual(Downloader.activity(for: "[soundcloud:search] query: Downloading search page"), "Searching SoundCloud")
         XCTAssertNil(Downloader.activity(for: "random noise"))
     }
@@ -226,5 +290,99 @@ final class DownloaderTests: XCTestCase {
         let file = try result.get()
         XCTAssertEqual(file.pathExtension, "mp3")
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    func testLiveBestMatchesNameTheVersionAskedFor() async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["SETLIST_LIVE"] == "1", "set SETLIST_LIVE=1 to run")
+        let repoBin = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("bin")
+        let live = ToolLocator(overrideDir: nil, bundleBinDir: repoBin, searchPaths: [])
+        let downloader = Downloader(runner: ProcessRunner(), locator: live)
+        let ytDlp = try live.url(for: .ytDlp)
+        for query in ["NewJeans - Right Now (R&B Remix)", "XG - LEFT RIGHT", "Fred again.. - Delilah (pull me out of this)"] {
+            let matches = await downloader.bestMatches(for: query, ytDlp: ytDlp)
+            print("LIVE \(query) -> \(matches)")
+            XCTAssertFalse(matches.isEmpty, query)
+        }
+    }
+
+    // MARK: Refusals that pass, names read at download time, how many at once
+
+    func testARefusalThatPassesIsTriedAgainAtTheSamePage() async throws {
+        let path = root.appendingPathComponent("01 - x.mp3").path
+        let runner = FakeRunner(results: [.fail("ERROR: unable to download video data: HTTP Error 403: Forbidden"), .ok("https://youtu.be/abc\n\(path)\n")])
+        var options = DownloadOptions()
+        options.retryPause = .zero
+        let result = await Downloader(runner: runner, locator: locator, options: options)
+            .fetch(track: Track(index: 1, query: "https://youtu.be/abc"), into: root)
+        XCTAssertEqual(try result.get().file.path, path)
+        XCTAssertEqual(runner.calls.compactMap(\.arguments.last), ["https://youtu.be/abc", "https://youtu.be/abc"])
+    }
+
+    func testARefusalIsGivenUpOnAfterThreeTriesAndOtherFailuresAreNotRepeated() async {
+        var options = DownloadOptions()
+        options.retryPause = .zero
+        let refusing = FakeRunner()
+        refusing.fallback = { _ in .fail("HTTP Error 403: Forbidden") }
+        let refused = await Downloader(runner: refusing, locator: locator, options: options)
+            .fetch(track: Track(index: 1, query: "https://youtu.be/abc"), into: root)
+        XCTAssertEqual(refused, .failure(.allSourcesFailed(lastStderr: "HTTP Error 403: Forbidden")))
+        XCTAssertEqual(refusing.calls.count, 3)
+
+        let gone = FakeRunner()
+        gone.fallback = { _ in .fail("ERROR: Video unavailable") }
+        _ = await Downloader(runner: gone, locator: locator, options: options)
+            .fetch(track: Track(index: 1, query: "https://youtu.be/abc"), into: root)
+        XCTAssertEqual(gone.calls.count, 1)
+    }
+
+    func testASoundCloudLinkWithoutANameHasItReadBeforeTheDownload() async throws {
+        let runner = FakeRunner()
+        runner.nameResult = { _ in .ok(#"{"id":"1","webpage_url":"https://soundcloud.com/caes/mamushi","uploader":"C A E S","title":"Mamushi (Caes Edit)"}"# + "\n") }
+        runner.fallback = { call in
+            let template = call.arguments[call.arguments.firstIndex(of: "-o")! + 1]
+            return .ok("https://soundcloud.com/caes/mamushi\n" + template.replacingOccurrences(of: ".%(ext)s", with: ".mp3") + "\n")
+        }
+        let downloader = Downloader(runner: runner, locator: locator)
+        let result = try await downloader.fetch(track: Track(index: 4, query: "https://soundcloud.com/caes/mamushi"), into: root).get()
+        XCTAssertEqual(result.file.lastPathComponent, "04 - C A E S - Mamushi (Caes Edit).mp3")
+        XCTAssertEqual(result.name, "C A E S - Mamushi (Caes Edit)")
+
+        // A name that is already known is not read again, and a YouTube link keeps using its own title.
+        runner.nameResult = { _ in XCTFail("no name lookup expected"); return .ok("") }
+        var named = Track(index: 5, query: "https://soundcloud.com/a/b")
+        named.songName = "A - B"
+        let known = try await downloader.fetch(track: named, into: root).get()
+        XCTAssertEqual(known.file.lastPathComponent, "05 - A - B.mp3")
+        XCTAssertNil(known.name)
+        let tube = try await downloader.fetch(track: Track(index: 6, query: "https://youtu.be/abc"), into: root).get()
+        XCTAssertEqual(tube.file.lastPathComponent, "06 - %(title).120B.mp3")
+    }
+
+    func testDownloadAllRemembersANameReadAtDownloadTime() async throws {
+        let runner = FakeRunner()
+        runner.nameResult = { _ in .ok(#"{"id":"1","webpage_url":"https://soundcloud.com/a/b","uploader":"A","title":"B"}"# + "\n") }
+        runner.fallback = { call in
+            let template = call.arguments[call.arguments.firstIndex(of: "-o")! + 1]
+            return .ok(template.replacingOccurrences(of: ".%(ext)s", with: ".mp3") + "\n")
+        }
+        let store = JobStore(root: root)
+        var job = Job(name: "links", kind: .link, tracks: [Track(index: 1, query: "https://soundcloud.com/a/b")])
+        _ = try store.directory(for: &job)
+        let finished = await Downloader(runner: runner, locator: locator).downloadAll(job: job, store: store) { _ in }
+        XCTAssertEqual(finished.tracks.first?.songName, "A - B")
+        XCTAssertEqual(finished.tracks.first?.displayName, "A - B")
+        // The list in the folder is written before the download; it has to end up with the name too.
+        let dir = try store.directory(for: &job)
+        XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent("tracklist.txt"), encoding: .utf8), "A - B\n")
+    }
+
+    func testRecommendedConcurrencyFollowsTheProcessorCount() {
+        XCTAssertEqual(DownloadOptions.recommendedConcurrency(cores: 1), 2)
+        XCTAssertEqual(DownloadOptions.recommendedConcurrency(cores: 4), 2)
+        XCTAssertEqual(DownloadOptions.recommendedConcurrency(cores: 8), 4)
+        XCTAssertEqual(DownloadOptions.recommendedConcurrency(cores: 10), 5)
+        XCTAssertEqual(DownloadOptions.recommendedConcurrency(cores: 24), 6)
     }
 }

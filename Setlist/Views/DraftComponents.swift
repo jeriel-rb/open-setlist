@@ -1,4 +1,5 @@
 import SwiftUI
+import SetlistCore
 
 /// A multi-line monospaced editor with placeholder text that sits exactly where typing starts.
 struct PlaceholderTextEditor: View {
@@ -58,7 +59,22 @@ struct DownloadBar: View {
     var skipped = 0
     /// True when at least one track is a song name that has to be searched for, not a direct link.
     var searches = true
+    /// The existing job to add to, on screens that offer it; nil inside means a new folder.
+    var target: Binding<UUID?>?
     let action: () -> Void
+
+    /// The picked job, as long as it still exists.
+    private var chosen: UUID? {
+        guard let id = target?.wrappedValue, model.addableJobs.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    /// A job as a line of the "Save to" menu. The menu's button is as wide as its longest line and does
+    /// not shrink, so a long name (a playlist's title names its folder) is cut short here.
+    private func menuTitle(_ job: Job) -> String {
+        let name = job.name.count > 40 ? job.name.prefix(40).trimmingCharacters(in: .whitespaces) + "…" : job.name
+        return "\(name) (\(job.tracks.count == 1 ? "1 song" : "\(job.tracks.count) songs"))"
+    }
 
     private var buttonTitle: String {
         let verb = searches ? "Find & Download" : "Download"
@@ -71,10 +87,23 @@ struct DownloadBar: View {
 
     var body: some View {
         HStack {
-            Text("Folder name")
-            TextField(namePlaceholder, text: $name)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 300)
+            if let target, !model.addableJobs.isEmpty {
+                Picker("Save to", selection: Binding(get: { chosen }, set: { target.wrappedValue = $0 })) {
+                    Text("New folder").tag(UUID?.none)
+                    Divider()
+                    ForEach(model.addableJobs) { job in
+                        Text(menuTitle(job)).tag(UUID?.some(job.id))
+                    }
+                }
+                .fixedSize()
+                .help("Start a new folder, or add these songs to one you already have. Songs it already has are not downloaded again.")
+            }
+            if chosen == nil {
+                Text("Folder name")
+                TextField(namePlaceholder, text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 300)
+            }
             Spacer()
             if skipped > 0 {
                 Label(skipped == 1 ? "1 line will be skipped" : "\(skipped) lines will be skipped", systemImage: "exclamationmark.triangle")
@@ -87,7 +116,7 @@ struct DownloadBar: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model.isWorking || count == 0)
                 .help(model.isWorking ? "Another download is still running."
-                      : searches ? "Each song is searched for on YouTube, then SoundCloud, and downloaded as an MP3." : "")
+                      : searches ? "Each song is searched for on YouTube and SoundCloud. The result that best matches the line, remix or edit included, is downloaded as an MP3." : "")
         }
     }
 }

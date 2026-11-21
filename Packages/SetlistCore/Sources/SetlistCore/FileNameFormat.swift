@@ -22,6 +22,14 @@ public struct FileNameFormat: Codable, Equatable, Sendable {
     /// `01 - Artist - Title`.
     public static let standard = FileNameFormat()
 
+    /// `Title - Artist`, without a number: what a new installation starts with.
+    public static let preferred: FileNameFormat = {
+        var format = FileNameFormat()
+        format.order = [.number, .title, .artist]
+        format.included = [.title, .artist]
+        return format
+    }()
+
     /// Stands in for the video title while the rest of the name is cleaned up.
     private static let linkTitleMarker = "\u{FFFC}"
     private static let linkTitleField = "%(title).120B"
@@ -75,6 +83,15 @@ public struct FileNameFormat: Codable, Equatable, Sendable {
         let name = JobStore.sanitizeFileName(assemble(index: index, text: query, isLink: TrackParser.isURL(query)))
         return name.replacingOccurrences(of: "%", with: "%%")
             .replacingOccurrences(of: Self.linkTitleMarker, with: Self.linkTitleField)
+    }
+
+    /// Like `stem(index:query:)`, for a track. A link whose song name is already known (read from its
+    /// playlist) is named after that, so artist and title follow this format like any typed song.
+    public func stem(for track: Track) -> String {
+        if TrackParser.isURL(track.query), let name = track.songName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            return fileName(index: track.index, text: name).replacingOccurrences(of: "%", with: "%%")
+        }
+        return stem(index: track.index, query: track.query)
     }
 
     /// The plain file name (no extension) for a file that already exists. `text` is the song as

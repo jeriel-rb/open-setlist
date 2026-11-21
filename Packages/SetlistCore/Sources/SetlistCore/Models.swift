@@ -77,7 +77,30 @@ public struct Track: Codable, Equatable, Identifiable, Sendable {
     /// The file name stem in the standard format, `NN - Artist - Title`. Downloads use
     /// `DownloadOptions.fileNameFormat`, which the user can change.
     public var fileStem: String {
-        FileNameFormat.standard.stem(index: index, query: query)
+        FileNameFormat.standard.stem(for: self)
+    }
+
+    /// How long `bars` bars of this song last, in seconds, at four beats to the bar. A tempo measured at
+    /// half or double speed (65 for a 130 BPM song) is brought into the usual 85 to 170 range first.
+    /// Without a tempo, 128 BPM is assumed.
+    public func seconds(forBars bars: Double) -> Double {
+        var tempo = Double(bpm ?? 128)
+        if tempo <= 0 { tempo = 128 }
+        while tempo < 85 { tempo *= 2 }
+        while tempo > 170 { tempo /= 2 }
+        return bars * 4 * 60 / tempo
+    }
+
+    /// The page this song comes from: where it was downloaded from, or for a pasted link the link
+    /// itself, which is known before anything is downloaded.
+    public var knownSource: String? {
+        sourceURL ?? (TrackParser.isURL(query) ? query : nil)
+    }
+
+    /// What to show for this track: the song's name when it is known, otherwise what was typed or pasted.
+    public var displayName: String {
+        if TrackParser.isURL(query), let name = songName?.trimmingCharacters(in: .whitespaces), !name.isEmpty { return name }
+        return query
     }
 }
 
@@ -166,6 +189,31 @@ public extension Job {
             copy.tracks[i].note = Self.interruptedNote
         }
         return copy
+    }
+
+    /// The job with new songs added after its last one, numbered on from its highest number, and how
+    /// many were added. A song the job already has (ignoring case and surrounding spaces) is left out.
+    func appending(_ queries: [String]) -> (job: Job, added: Int) {
+        appending(tracks: queries.map { Track(index: 0, query: $0) })
+    }
+
+    /// The same for tracks that may already carry a song name (links read from a playlist).
+    func appending(tracks new: [Track]) -> (job: Job, added: Int) {
+        var copy = self
+        func key(_ query: String) -> String { query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        var seen = Set(tracks.map { key($0.query) })
+        var next = (tracks.map(\.index).max() ?? 0) + 1
+        var added = 0
+        for track in new {
+            let text = track.query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, seen.insert(key(text)).inserted else { continue }
+            var appended = Track(index: next, query: text)
+            appended.songName = track.songName
+            copy.tracks.append(appended)
+            next += 1
+            added += 1
+        }
+        return (copy, added)
     }
 
     /// Failed and cancelled tracks go back to pending so `Downloader.downloadAll` picks them up again.

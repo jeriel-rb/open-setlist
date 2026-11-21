@@ -5,7 +5,12 @@ struct LinkView: View {
     @Environment(AppModel.self) private var model
 
     private var status: String {
-        if model.isResolvingLinks { return "Looking up your links…" }
+        if model.isResolvingLinks {
+            let found = model.linkTracks.count
+            guard found > 0 else { return "Looking up your links…" }
+            let named = model.linkTracks.filter { !TrackParser.isURL($0.displayName) }.count
+            return "\(found) tracks found so far. Reading their names: \(named) of \(found). You can start the download now."
+        }
         switch model.linkTracks.count {
         case 0: return "The songs in your links are listed here."
         case 1: return "1 track found. Fix any line below before downloading."
@@ -43,11 +48,12 @@ struct LinkView: View {
 
             TrackTableView(tracks: $model.linkTracks, detailed: false)
                 .frame(minHeight: 160)
-            DownloadBar(namePlaceholder: AppModel.defaultName("Links"), name: $model.linkName,
+            DownloadBar(namePlaceholder: model.linkPlaylistName ?? AppModel.defaultName("Links"), name: $model.linkName,
                         count: model.readyTracks(model.linkTracks, in: .text).count,
                         skipped: model.skippedCount(model.linkTracks, in: .text),
                         // Spotify links come back as song names, which are then searched for.
-                        searches: model.linkTracks.contains { !TrackParser.isURL($0.query) }) {
+                        searches: model.linkTracks.contains { !TrackParser.isURL($0.query) },
+                        target: $model.linkTarget) {
                 model.startLinkJob()
             }
         }

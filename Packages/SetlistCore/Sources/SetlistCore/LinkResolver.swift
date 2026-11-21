@@ -12,6 +12,31 @@ public enum LinkKind: Equatable, Sendable {
     case notALink
 }
 
+/// One song a pasted link stands for.
+public struct LinkEntry: Equatable, Sendable {
+    /// What to download: a page address, or "Artist - Title" to search for.
+    public var query: String
+    /// The song as "Artist - Title", when the link is an address and its page was read.
+    public var name: String?
+
+    public init(query: String, name: String? = nil) {
+        self.query = query
+        self.name = name
+    }
+}
+
+/// What a pasted link turned out to contain.
+public struct ResolvedLink: Equatable, Sendable {
+    public var entries: [LinkEntry]
+    /// The playlist's own name, for naming the folder.
+    public var title: String?
+
+    public init(entries: [LinkEntry], title: String? = nil) {
+        self.entries = entries
+        self.title = title
+    }
+}
+
 /// Turns pasted links into download queries: URLs for yt-dlp, or "Artist - Title" text for Spotify.
 public struct LinkResolver: Sendable {
     public enum Error: Swift.Error, Equatable, LocalizedError {
@@ -134,10 +159,123 @@ public struct LinkResolver: Sendable {
 
     /// One JSON object per line; prefers `url`, falls back to `webpage_url`.
     public static func parsePlaylistEntries(_ stdout: String) -> [String] {
-        stdout.split(separator: "\n").compactMap { line in
+        parsePlaylist(stdout).entries.map(\.url)
+    }
+
+    /// A playlist entry as the quick listing gives it. SoundCloud leaves out the title, and for all but
+    /// the first few songs gives an address made of the song's number.
+    public struct PlaylistEntry: Equatable, Sendable {
+        public var id: String?
+        public var url: String
+        public var title: String?
+        public var uploader: String?
+    }
+
+    public static func parsePlaylist(_ stdout: String) -> (title: String?, entries: [PlaylistEntry]) {
+        var title: String?
+        let entries: [PlaylistEntry] = stdout.split(separator: "\n").compactMap { line in
             guard let data = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            return (obj["url"] as? String) ?? (obj["webpage_url"] as? String)
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let url = (obj["url"] as? String) ?? (obj["webpage_url"] as? String) else { return nil }
+            if title == nil { title = text(obj["playlist_title"]) }
+            return PlaylistEntry(id: text(obj["id"]), url: url, title: text(obj["title"]),
+                                 uploader: text(obj["uploader"]) ?? text(obj["channel"]))
+        }
+        return (title, entries)
+    }
+
+    private static func text(_ value: Any?) -> String? {
+        guard let s = (value as? String)?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+        return s
+    }
+
+    // MARK: Song names
+
+    /// How many songs of a playlist one yt-dlp run reads the names of. Longer playlists are split over
+    /// up to `nameRuns` runs at the same time, since each song costs about a second.
+    static let namesPerRun = 10
+    static let nameRuns = 4
+
+    /// The 1-based stretches of a playlist of `count` songs that are read at the same time.
+    public static func nameRanges(count: Int) -> [ClosedRange<Int>] {
+        guard count > 0 else { return [] }
+        let runs = min(nameRuns, max(1, count / namesPerRun))
+        let size = Int((Double(count) / Double(runs)).rounded(.up))
+        return stride(from: 1, through: count, by: size).map { $0...min(count, $0 + size - 1) }
+    }
+
+    /// Reads title, uploader and page address without downloading: of the songs `range` of a playlist,
+    /// or of the one song at `url` when there is no range.
+    public static func nameArguments(url: String, range: ClosedRange<Int>? = nil) -> [String] {
+        ["--skip-download", "--no-warnings", "--ignore-errors", "--socket-timeout", "30"]
+            + (range.map { ["-I", "\($0.lowerBound):\($0.upperBound)"] } ?? ["--no-playlist"])
+            + ["--print", "%(.{id,webpage_url,uploader,title})j", url]
+    }
+
+    /// True for a link whose own title often leaves the artist out, so its page is worth reading for the name.
+    public static func needsNameLookup(_ url: String) -> Bool {
+        URL(string: url)?.host?.lowercased().contains("soundcloud.com") == true
+    }
+
+    /// The song at `url` as "Artist - Title", read from its page. nil when the page could not be read.
+    public func songName(at url: String) async -> String? {
+        guard let ytDlp = try? locator.url(for: .ytDlp),
+              let result = try? await runner.run(ytDlp, arguments: Self.nameArguments(url: url), onLine: nil),
+              let entry = Self.parsePlaylist(result.stdout).entries.first else { return nil }
+        return Self.songName(title: entry.title, uploader: entry.uploader, url: entry.url)
+    }
+
+    /// Things uploaders add to a title that are not part of the song's name.
+    private static let promotion = try! NSRegularExpression(
+        pattern: #"\s*\|\s*#.*$|[\(\[]?\s*\bfree\s+(download|dl)\b\s*[\)\]]?"#, options: .caseInsensitive)
+    private static let unavailable: Set<String> = ["[Private video]", "[Deleted video]", "[Private track]"]
+
+    /// The song as "Artist - Title" from what its page says. A title that already names the artist is
+    /// used as it is; a SoundCloud title that does not gets the uploader in front, who on SoundCloud is
+    /// the artist or the person who made the edit. nil when there is nothing usable.
+    public static func songName(title: String?, uploader: String?, url: String) -> String? {
+        guard let title, !unavailable.contains(title) else { return nil }
+        var name = promotion.stringByReplacingMatches(in: title, range: NSRange(title.startIndex..., in: title), withTemplate: " ")
+        name = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            .trimmingCharacters(in: CharacterSet(charactersIn: " -–—|"))
+        guard !name.isEmpty else { return nil }
+        if FileNameFormat.split(name).artist != nil { return name }
+        guard URL(string: url)?.host?.lowercased().contains("soundcloud.com") == true,
+              let uploader = text(uploader) else { return name }
+        return "\(uploader) - \(name)"
+    }
+
+    /// Titles and page addresses of a playlist's songs by id, read in a few runs at the same time.
+    /// Songs that cannot be read (private, removed) are simply missing.
+    /// `onFound` is called with everything read so far each time one more song comes in.
+    private func names(of url: String, count: Int, ytDlp: URL,
+                       onFound: (@Sendable ([String: PlaylistEntry]) -> Void)?) async -> [String: PlaylistEntry] {
+        let found = Found()
+        await withTaskGroup(of: Void.self) { group in
+            for range in Self.nameRanges(count: count) {
+                group.addTask {
+                    _ = try? await runner.run(ytDlp, arguments: Self.nameArguments(url: url, range: range)) { line in
+                        guard let entry = Self.parsePlaylist(line).entries.first, let id = entry.id else { return }
+                        onFound?(found.add(entry, id: id))
+                    }
+                }
+            }
+        }
+        return found.all
+    }
+
+    /// Songs read so far, filled from several runs at once.
+    private final class Found: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: PlaylistEntry] = [:]
+
+        var all: [String: PlaylistEntry] { lock.withLock { entries } }
+
+        func add(_ entry: PlaylistEntry, id: String) -> [String: PlaylistEntry] {
+            lock.withLock {
+                entries[id] = entry
+                return entries
+            }
         }
     }
 
@@ -145,30 +283,46 @@ public struct LinkResolver: Sendable {
 
     /// Download queries for one pasted line.
     public func resolve(_ text: String) async throws -> [String] {
+        try await lookUp(text).entries.map(\.query)
+    }
+
+    /// The songs one pasted line stands for, with their names where the link's page gives them.
+    /// For a playlist whose names have to be read song by song, `onUpdate` gets the list as soon as it is
+    /// known and again each time a name comes in, so the songs can be shown while the rest is read.
+    public func lookUp(_ text: String, onUpdate: (@Sendable (ResolvedLink) -> Void)? = nil) async throws -> ResolvedLink {
         let s = text.trimmingCharacters(in: .whitespaces)
         switch Self.kind(of: s) {
         case .notALink, .single:
-            return [s]
+            return ResolvedLink(entries: [LinkEntry(query: s)])
         case .playlist:
             let ytDlp = try locator.url(for: .ytDlp)
             let result = try await runner.run(ytDlp, arguments: Self.playlistArguments(url: s), onLine: nil)
             guard result.exitCode == 0 else {
                 throw ToolError.failed(.ytDlp, exitCode: result.exitCode, stderr: result.stderr)
             }
-            let entries = Self.parsePlaylistEntries(result.stdout)
-            guard !entries.isEmpty else { throw Error.playlistEmpty(s) }
-            return entries
+            let (title, listed) = Self.parsePlaylist(result.stdout)
+            guard !listed.isEmpty else { throw Error.playlistEmpty(s) }
+            // YouTube lists titles straight away. SoundCloud does not, so its songs are read one by one.
+            let resolved: @Sendable ([String: PlaylistEntry]) -> ResolvedLink = { read in
+                ResolvedLink(entries: listed.map { entry in
+                    let known = entry.id.flatMap { read[$0] } ?? entry
+                    return LinkEntry(query: known.url, name: Self.songName(title: known.title, uploader: known.uploader, url: known.url))
+                }, title: title)
+            }
+            guard listed.contains(where: { $0.title == nil }) else { return resolved([:]) }
+            onUpdate?(resolved([:]))
+            return resolved(await names(of: s, count: listed.count, ytDlp: ytDlp) { onUpdate?(resolved($0)) })
         case .spotifyTrack:
-            guard let entity = Self.spotifyEntity(s) else { return [s] }
+            guard let entity = Self.spotifyEntity(s) else { return ResolvedLink(entries: [LinkEntry(query: s)]) }
             let page = try await fetch(URL(string: "https://open.spotify.com/track/\(entity.id)")!)
             guard let query = Self.parseSpotifyTrackPage(page) else { throw Error.spotifyUnavailable }
-            return [query]
+            return ResolvedLink(entries: [LinkEntry(query: query)])
         case .spotifyCollection:
-            guard let entity = Self.spotifyEntity(s) else { return [s] }
+            guard let entity = Self.spotifyEntity(s) else { return ResolvedLink(entries: [LinkEntry(query: s)]) }
             let page = try await fetch(URL(string: "https://open.spotify.com/embed/\(entity.type)/\(entity.id)")!)
             let queries = Self.parseSpotifyEmbedPage(page)
             guard !queries.isEmpty else { throw Error.spotifyUnavailable }
-            return queries
+            return ResolvedLink(entries: queries.map { LinkEntry(query: $0) })
         }
     }
 

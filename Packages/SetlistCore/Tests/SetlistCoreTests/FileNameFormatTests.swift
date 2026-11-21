@@ -94,4 +94,22 @@ final class FileNameFormatTests: XCTestCase {
         let args = runner.calls[0].arguments
         XCTAssertEqual(args[args.firstIndex(of: "-o")! + 1], "/tmp/out/XG - LEFT RIGHT.%(ext)s")
     }
+
+    func testALinkWithAKnownSongNameIsNamedLikeATypedSong() {
+        var track = Track(index: 3, query: "https://soundcloud.com/caes/mamushi")
+        XCTAssertEqual(FileNameFormat.standard.stem(for: track), "03 - %(title).120B")
+        track.songName = "C A E S - Mamushi 100% (Edit)"
+        XCTAssertEqual(FileNameFormat.standard.stem(for: track), "03 - C A E S - Mamushi 100%% (Edit)")
+        var titleOnly = FileNameFormat()
+        titleOnly.included = [.number, .title]
+        XCTAssertEqual(titleOnly.stem(for: track), "03 - Mamushi 100%% (Edit)")
+        // Typed songs are unchanged.
+        XCTAssertEqual(FileNameFormat.standard.stem(for: Track(index: 1, query: "XG - LEFT RIGHT")), "01 - XG - LEFT RIGHT")
+    }
+
+    func testThePreferredFormatIsTitleThenArtistWithoutANumber() {
+        XCTAssertEqual(FileNameFormat.preferred.fileName(index: 3, text: "XG - LEFT RIGHT"), "LEFT RIGHT - XG")
+        XCTAssertEqual(FileNameFormat.preferred.fileName(index: 3, text: "Just A Title"), "Just A Title")
+        XCTAssertTrue(FileNameFormat.preferred.canCollide)
+    }
 }

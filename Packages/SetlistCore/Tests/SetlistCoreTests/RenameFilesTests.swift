@@ -69,6 +69,17 @@ final class RenameFilesTests: XCTestCase {
         XCTAssertEqual(try files(in: dir), ["01 - Tyga - Taste (Official Video).mp3"])
     }
 
+    func testALinkWhoseNameWasClearedIsStillNamedAfterItsFile() throws {
+        var (job, dir) = try makeJob([("https://youtu.be/abc", "01 - Tyga - Taste (Official Video).mp3")])
+        // The name field of a link was emptied before the download: that is no name, not a song called "".
+        job.tracks[0].songName = " "
+        var format = FileNameFormat.standard
+        format.order = [.title, .artist, .number]
+        try store.renameFiles(of: &job, to: format)
+        XCTAssertEqual(try files(in: dir), ["Taste (Official Video) - Tyga - 01.mp3"])
+        XCTAssertEqual(job.tracks[0].songName, "Tyga - Taste (Official Video)")
+    }
+
     func testSameNameGetsACounterInsteadOfOverwriting() throws {
         var (job, dir) = try makeJob([("XG - LEFT RIGHT", "01 - XG - LEFT RIGHT.mp3"), ("XG - LEFT RIGHT", "02 - XG - LEFT RIGHT.mp3")])
         var format = FileNameFormat.standard
@@ -104,5 +115,67 @@ final class RenameFilesTests: XCTestCase {
         XCTAssertEqual(try store.renameFiles(of: &job, to: format), 1)
         XCTAssertEqual(try files(in: dir), ["LEFT RIGHT.mp3"])
         XCTAssertEqual(job.tracks[1].outputPath, "/nowhere/02 - Gone - Song.mp3")
+    }
+
+    // MARK: One song: rename, delete, order in Finder
+
+    func testRenamingATypedSongRenamesItsFileInTheJobsFormat() throws {
+        var (job, dir) = try makeJob([("XG - LEFT RIGHT", "01 - XG - LEFT RIGHT.mp3"), ("A - B", "02 - A - B.mp3")])
+        try store.renameTrack(job.tracks[0].id, in: &job, to: "  XG - Left Right (Remix) ")
+        XCTAssertEqual(try files(in: dir), ["01 - XG - Left Right (Remix).mp3", "02 - A - B.mp3"])
+        XCTAssertEqual(job.tracks[0].query, "XG - Left Right (Remix)")
+        XCTAssertEqual(URL(fileURLWithPath: job.tracks[0].outputPath!).lastPathComponent, "01 - XG - Left Right (Remix).mp3")
+        XCTAssertEqual(try store.loadAll().first?.tracks.first?.query, "XG - Left Right (Remix)")
+    }
+
+    func testRenamingALinkKeepsItsAddressAndFollowsTheFormat() throws {
+        var (job, dir) = try makeJob([("https://soundcloud.com/a/b", "B - A.mp3")])
+        job.fileNameFormat = .preferred
+        try store.renameTrack(job.tracks[0].id, in: &job, to: "Artist - Song")
+        XCTAssertEqual(try files(in: dir), ["Song - Artist.mp3"])
+        XCTAssertEqual(job.tracks[0].query, "https://soundcloud.com/a/b")
+        XCTAssertEqual(job.tracks[0].displayName, "Artist - Song")
+    }
+
+    func testRenamingRefusesAnEmptyNameAndANameAnotherFileHas() throws {
+        var (job, dir) = try makeJob([("A - B", "01 - A - B.mp3"), ("C - D", "02 - C - D.mp3")])
+        job.fileNameFormat = .preferred
+        try FileManager.default.moveItem(at: dir.appendingPathComponent("01 - A - B.mp3"), to: dir.appendingPathComponent("B - A.mp3"))
+        try FileManager.default.moveItem(at: dir.appendingPathComponent("02 - C - D.mp3"), to: dir.appendingPathComponent("D - C.mp3"))
+        job.tracks[0].outputPath = "B - A.mp3"
+        job.tracks[1].outputPath = "D - C.mp3"
+        XCTAssertThrowsError(try store.renameTrack(job.tracks[0].id, in: &job, to: "  ")) {
+            XCTAssertEqual($0 as? JobStore.TrackFileError, .emptyName)
+        }
+        XCTAssertThrowsError(try store.renameTrack(job.tracks[0].id, in: &job, to: "C - D")) {
+            XCTAssertEqual($0 as? JobStore.TrackFileError, .nameTaken("D - C.mp3"))
+        }
+        XCTAssertEqual(try files(in: dir), ["B - A.mp3", "D - C.mp3"])
+        XCTAssertEqual(job.tracks[0].query, "A - B")
+    }
+
+    func testDeletingASongDiscardsItsFileAndKeepsTheOthersNumbers() throws {
+        var (job, dir) = try makeJob([("A - B", "01 - A - B.mp3"), ("C - D", "02 - C - D.mp3"), ("E - F", nil)])
+        var discarded: [String] = []
+        try store.deleteTrack(job.tracks[0].id, from: &job) { file in
+            discarded.append(file.lastPathComponent)
+            try FileManager.default.removeItem(at: file)
+        }
+        // A song that was never downloaded has no file to discard.
+        try store.deleteTrack(job.tracks[1].id, from: &job) { _ in XCTFail("nothing to discard") }
+        XCTAssertEqual(discarded, ["01 - A - B.mp3"])
+        XCTAssertEqual(try files(in: dir), ["02 - C - D.mp3"])
+        XCTAssertEqual(job.tracks.map(\.index), [2])
+        XCTAssertEqual(try store.loadAll().first?.tracks.map(\.query), ["C - D"])
+    }
+
+    func testStampingDatesTheFilesInListOrder() throws {
+        let (job, dir) = try makeJob([("Zed - Last Alphabetically", "Zed.mp3"), ("Gone - Missing", nil), ("Abe - First Alphabetically", "Abe.mp3")])
+        XCTAssertEqual(store.stampListOrder(of: job), 2)
+        let created = try ["Zed.mp3", "Abe.mp3"].map {
+            try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent($0).path)[.creationDate] as! Date
+        }
+        XCTAssertEqual(created[0].timeIntervalSince(job.createdAt), 0, accuracy: 1)
+        XCTAssertEqual(created[1].timeIntervalSince(created[0]), 2, accuracy: 0.01)
     }
 }

@@ -8,9 +8,9 @@ struct HelpView: View {
             VStack(alignment: .leading, spacing: 22) {
                 section("Three ways to start") {
                     row(icon: "text.alignleft", title: "Text",
-                        text: "Paste or type song names, one per line, like “XG - LEFT RIGHT”. Timestamps and numbering are removed for you. Each song is searched for on YouTube, then SoundCloud.")
+                        text: "Paste or type song names, one per line, like “XG - LEFT RIGHT”. Timestamps and numbering are removed for you. Each song is searched for on YouTube and SoundCloud, and the result whose title best matches your line is downloaded. Name the remix or edit in the line, like “NewJeans - Right Now (R&B Remix)”, to get that version.")
                     row(icon: "link", title: "Link",
-                        text: "Paste YouTube, SoundCloud or Spotify links, one per line. Playlists and albums are opened up into their songs. Spotify has no audio to download, so its songs are found on YouTube by name.")
+                        text: "Paste YouTube, SoundCloud or Spotify links, one per line. Playlists and albums are opened up into their songs. Spotify has no audio to download, so its songs are found on YouTube or SoundCloud by name. To put more songs in a folder you already have, pick it under “Save to”, or press Add Songs on its page.")
                     row(icon: "waveform.badge.magnifyingglass", title: "YouTube Set",
                         text: "Paste the link of one DJ set or mix. If its description or comments list the songs, that list is used. If not, the mix is downloaded and Shazam listens to it, naming the songs one by one.")
                 }
@@ -43,6 +43,7 @@ struct HelpView: View {
                     Text("**Stop** ends the job; what is already downloaded stays.")
                     Text("**Resume** continues a mix from the point Shazam had reached. Nothing is downloaded twice.")
                     Text("**Retry** tries the failed and cancelled songs again.")
+                    Text("**Add Songs** opens the Link tab set to download into that folder. New songs are numbered on from the last one, and songs the folder already has are not downloaded again.")
                     Text("**Rename Files** changes how the files in that one folder are named. The naming for new downloads is in Settings.")
                     Text("Click a job's title to rename it; its folder is renamed too. Click a column heading to sort. Double-click a downloaded song to play it.")
                 }

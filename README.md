@@ -1,9 +1,9 @@
 # Setlist
 
-A native macOS app that turns a tracklist, a handful of links, or a whole DJ mix into a folder of numbered MP3s.
+A native macOS app that turns a tracklist, a handful of links, or a whole DJ mix into a folder of MP3s.
 
-- **Text**: paste a tracklist. Timestamps, numbering and headers are stripped; each line is searched on YouTube, then SoundCloud.
-- **Link**: paste YouTube, SoundCloud or Spotify links. Playlists and albums are expanded. Spotify links are resolved to "Artist - Title" and matched on YouTube, because Spotify serves no audio.
+- **Text**: paste a tracklist. Timestamps, numbering and headers are stripped; each line is searched on YouTube and SoundCloud, and the result that best matches it (remix or edit included) is downloaded.
+- **Link**: paste YouTube, SoundCloud or Spotify links. Playlists and albums are expanded. Spotify links are resolved to "Artist - Title" and matched on YouTube or SoundCloud, because Spotify serves no audio. Songs can be added to a folder you already have.
 - **YouTube Set**: paste the link of a mix. If a tracklist is posted in the description or comments, it is used. Otherwise the mix is downloaded and identified with Shazam, 30 seconds at a time; each song appears and starts downloading as soon as it is found.
 
 Every download is analysed on your Mac for tempo and key (shown as BPM and a Camelot code such as `8A`, and written to the file's tags). Double-click a finished song to preview it.
@@ -59,7 +59,7 @@ The app checks Shazam before downloading a mix, so a build that is not set up fo
 
 ## Where things go
 
-- Downloads: `~/Documents/Setlist/<job name>/`, as `01 - Artist - Title.mp3`, with `tracklist.txt`, `failed.txt` and a `job.json` that holds the job's state. Change the folder in Settings.
+- Downloads: `~/Documents/Setlist/<job name>/`, as `Title - Artist.mp3` (the parts, their order and a number are set in Settings), with `tracklist.txt`, `failed.txt` and a `job.json` that holds the job's state. Change the folder in Settings.
 - A newer yt-dlp fetched from Settings → Update: `~/Library/Application Support/Setlist/bin/`.
 
 ## What leaves your Mac

@@ -5,7 +5,15 @@ struct JobProgressView: View {
     @Environment(AppModel.self) private var model
     @Environment(Player.self) private var player
     let job: Job
-    @State private var selectedTrack: Track.ID?
+    @State private var selectedTracks = Set<Track.ID>()
+    /// The song being renamed from the right-click menu, and the name being typed for it.
+    @State private var renaming: Track?
+    @State private var newTrackName = ""
+    /// Command-F: what is typed in the search field, and whether the field has the cursor.
+    @State private var searchText = ""
+    @State private var searching = false
+    /// Set by an arrow key, so the row it moves to is played when a song is already playing.
+    @State private var movedByArrow = false
     @State private var renamingFiles = false
     /// Click a column header to sort by it; click again to reverse.
     @State private var sortOrder = [KeyPathComparator(\Track.index)]
@@ -47,10 +55,21 @@ struct JobProgressView: View {
                         // Pull the field left so its text stays in line with everything below it.
                         .padding(.leading, -Self.titleInset)
                         .help("Click to rename. The folder is renamed too. Return saves, Esc cancels.")
-                    Text(summary)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(summary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        if let dir = model.directory(of: job) {
+                            Text("·").foregroundStyle(.secondary)
+                            Button {
+                                model.revealInFinder(job)
+                            } label: {
+                                Label("Show in Finder", systemImage: "folder")
+                            }
+                            .buttonStyle(.link)
+                            .help(dir.tildePath)
+                        }
+                    }
                 }
                 Spacer()
                 if running {
@@ -75,6 +94,14 @@ struct JobProgressView: View {
                     }
                     .help("Download the failed and cancelled tracks again.")
                 }
+                if !running, job.kind != .youtubeSet {
+                    Button {
+                        model.addSongs(to: job)
+                    } label: {
+                        Label("Add Songs…", systemImage: "plus")
+                    }
+                    .help("Paste more links and download them into this folder.")
+                }
                 if !running, job.tracks.contains(where: { $0.status == .done }) {
                     Button {
                         renamingFiles = true
@@ -82,11 +109,6 @@ struct JobProgressView: View {
                         Label("Rename Files…", systemImage: "character.cursor.ibeam")
                     }
                     .help("Change how the files in this folder are named.")
-                }
-                Button {
-                    model.revealInFinder(job)
-                } label: {
-                    Label("Show in Finder", systemImage: "folder")
                 }
             }
 
@@ -99,7 +121,7 @@ struct JobProgressView: View {
                 ProgressView(value: Double(finished), total: Double(max(job.tracks.count, 1)))
             }
 
-            Table(job.tracks.sorted(using: sortOrder), selection: $selectedTrack, sortOrder: $sortOrder) {
+            Table(shownTracks.sorted(using: sortOrder), selection: $selectedTracks, sortOrder: $sortOrder) {
                 TableColumn("", value: \.statusRank) { track in
                     StatusIcon(status: track.status)
                 }
@@ -112,9 +134,9 @@ struct JobProgressView: View {
                     Text(track.start.map(JobStore.timestamp) ?? "").monospacedDigit().foregroundStyle(.secondary)
                 }
                 .width(job.kind == .youtubeSet ? 64 : 0)
-                TableColumn("Track", value: \.query) { track in
+                TableColumn("Track", value: \.displayName) { track in
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(track.query).lineLimit(1)
+                        Text(track.displayName).lineLimit(1)
                         if let activity = track.activity, track.status.isActive {
                             HStack(spacing: 4) {
                                 ProgressView().controlSize(.mini)
@@ -150,7 +172,7 @@ struct JobProgressView: View {
                 }
                 .width(130)
                 TableColumn("Source", value: \.sourceLabel) { track in
-                    if let address = track.sourceURL, let url = URL(string: address) {
+                    if let address = track.knownSource, let url = URL(string: address) {
                         Link(track.sourceLabel, destination: url)
                             .help("Open \(address)")
                     }
@@ -160,12 +182,61 @@ struct JobProgressView: View {
             .tableStyle(.inset(alternatesRowBackgrounds: true))
             // Double-click (the primary action) previews a downloaded song in the mini player.
             .contextMenu(forSelectionType: Track.ID.self) { ids in
-                if let track = job.tracks.first(where: { ids.contains($0.id) }), let file = model.file(of: track, in: job) {
-                    Button("Play") { play(track) }
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                let chosen = job.tracks.filter { ids.contains($0.id) }
+                let files = chosen.compactMap { model.file(of: $0, in: job) }
+                if chosen.count == 1, let track = chosen.first {
+                    if !files.isEmpty { Button("Play") { play(track) } }
+                    Button("Rename…") {
+                        newTrackName = track.displayName
+                        renaming = track
+                    }
+                    .disabled(!model.canEditTracks(of: job))
+                }
+                if !files.isEmpty {
+                    Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(files) }
+                }
+                if !chosen.isEmpty {
+                    Divider()
+                    Button(chosen.count == 1 ? "Delete" : "Delete \(chosen.count) Songs", role: .destructive) {
+                        model.delete(chosen, from: job)
+                        selectedTracks.subtract(ids)
+                    }
+                    .disabled(!model.canEditTracks(of: job))
                 }
             } primaryAction: { ids in
                 if let track = job.tracks.first(where: { ids.contains($0.id) }) { play(track) }
+            }
+            // Space plays the selected song, or pauses and resumes it when it is the one playing.
+            .onKeyPress(.space) {
+                guard let track = selectedTrack else { return .ignored }
+                if let file = model.file(of: track, in: job), file == player.fileURL {
+                    player.toggle()
+                } else {
+                    play(track)
+                }
+                return .handled
+            }
+            // The arrows move the selection as usual; while a song plays, the row they land on plays next.
+            .onKeyPress(keys: [.upArrow, .downArrow]) { _ in
+                movedByArrow = true
+                // At the top or bottom row nothing moves; forget the key so a later click does not play.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { movedByArrow = false }
+                return .ignored
+            }
+            // Left and right jump through the playing song by 8 bars, one phrase, so each press lands on the
+            // next section (intro, build-up, drop). With Shift it is 1 bar, for lining up exactly.
+            .onKeyPress(keys: [.leftArrow, .rightArrow]) { press in
+                guard let playing = player.fileURL else { return .ignored }
+                let track = job.tracks.first { model.file(of: $0, in: job) == playing } ?? selectedTrack
+                let length = (track ?? Track(index: 0, query: "")).seconds(forBars: press.modifiers.contains(.shift) ? 1 : 8)
+                let target = player.currentTime + (press.key == .rightArrow ? length : -length)
+                player.seek(to: min(target, max(0, player.duration - 1)))
+                return .handled
+            }
+            .onChange(of: selectedTracks) { _, _ in
+                guard movedByArrow else { return }
+                movedByArrow = false
+                if player.isPlaying, let track = selectedTrack, model.file(of: track, in: job) != nil { play(track) }
             }
         }
         .padding(20)
@@ -173,8 +244,26 @@ struct JobProgressView: View {
         .contentShape(Rectangle())
         .onTapGesture { titleFocused = false }
         .navigationTitle(job.name)
+        .searchable(text: $searchText, isPresented: $searching, prompt: "Find a song")
+        // A song the search hides is no longer selected, so Space and Delete only act on what is on screen.
+        .onChange(of: searchText) { _, _ in selectedTracks.formIntersection(shownTracks.map(\.id)) }
+        // Command-F puts the cursor in the search field, as in other Mac apps.
+        .background {
+            Button("Find") { searching = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .sheet(isPresented: $renamingFiles) {
             RenameFilesSheet(job: job)
+        }
+        .alert("Rename Song", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }), presenting: renaming) { track in
+            TextField("Artist - Title", text: $newTrackName)
+            Button("Rename") { model.rename(track, in: job, to: newTrackName) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Write it as Artist - Title. The file is renamed to match.")
         }
         .onAppear { title = job.name }
         .onChange(of: job.name) { _, new in if !titleFocused { title = new } }
@@ -182,15 +271,32 @@ struct JobProgressView: View {
 
     private static let titleInset: CGFloat = 6
 
+    /// The songs that match what is typed in the search field: every word must be in the song's name,
+    /// its BPM, key or source, in any order, ignoring capitals and accents. All songs when it is empty.
+    private var shownTracks: [Track] {
+        let words = searchText.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !words.isEmpty else { return job.tracks }
+        return job.tracks.filter { track in
+            let text = [track.displayName, track.bpm.map(String.init) ?? "", track.key ?? "", track.sourceLabel].joined(separator: " ")
+            return words.allSatisfy { text.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+        }
+    }
+
+    /// The one selected song, when exactly one is selected.
+    private var selectedTrack: Track? {
+        guard selectedTracks.count == 1, let id = selectedTracks.first else { return nil }
+        return job.tracks.first { $0.id == id }
+    }
+
     private func play(_ track: Track) {
         guard let file = model.file(of: track, in: job) else {
-            if track.status == .done { model.errorMessage = "The file for “\(track.query)” is no longer in the job folder." }
+            if track.status == .done { model.errorMessage = "The file for “\(track.displayName)” is no longer in the job folder." }
             return
         }
         do {
             try player.play(file, title: file.deletingPathExtension().lastPathComponent)
         } catch {
-            model.errorMessage = "Could not play “\(track.query)”: \(error.localizedDescription)"
+            model.errorMessage = "Could not play “\(track.displayName)”: \(error.localizedDescription)"
         }
     }
 
@@ -206,7 +312,6 @@ struct JobProgressView: View {
         var parts = ["\(done) of \(job.tracks.count) downloaded"]
         if failed > 0 { parts.append("\(failed) failed") }
         if cancelled > 0 { parts.append("\(cancelled) cancelled") }
-        if let dir = model.directory(of: job) { parts.append(dir.tildePath) }
         return parts.joined(separator: " · ")
     }
 }
@@ -316,7 +421,7 @@ extension Track {
     var statusRank: String { status.rawValue }
     /// The site a song was downloaded from, by name. Empty when it is not known.
     var sourceLabel: String {
-        guard let sourceURL, let host = URL(string: sourceURL)?.host?.lowercased() else { return "" }
+        guard let knownSource, let host = URL(string: knownSource)?.host?.lowercased() else { return "" }
         if host.hasSuffix("youtube.com") || host.hasSuffix("youtu.be") { return "YouTube" }
         if host.hasSuffix("soundcloud.com") { return "SoundCloud" }
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host

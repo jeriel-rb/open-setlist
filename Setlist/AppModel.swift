@@ -48,12 +48,18 @@ final class AppModel {
     var draftText = ""
     var draftName = ""
     var draftTracks: [Track] = []
+    /// The job the songs are added to; nil makes a new folder.
+    var draftTarget: UUID?
 
     // MARK: Link draft
     var linkText = ""
     var linkName = ""
     var linkTracks: [Track] = []
+    /// The job the songs are added to; nil makes a new folder.
+    var linkTarget: UUID?
     var linkFailures: [String] = []
+    /// The name of the playlist that was pasted, used for the folder unless another name is typed.
+    var linkPlaylistName: String?
     var isResolvingLinks = false
 
     // MARK: YouTube Set draft
@@ -122,7 +128,7 @@ final class AppModel {
         self.keepOriginalMix = defaults.bool(forKey: Keys.keepOriginalMix)
         self.appearance = defaults.string(forKey: Keys.appearance).flatMap(AppAppearance.init) ?? .system
         self.fileNameFormat = defaults.data(forKey: Keys.fileNameFormat)
-            .flatMap { try? JSONDecoder().decode(FileNameFormat.self, from: $0) } ?? .standard
+            .flatMap { try? JSONDecoder().decode(FileNameFormat.self, from: $0) } ?? .preferred
         try? FileManager.default.removeItem(at: Self.legacyWorkRoot)
         reloadJobs()
     }
@@ -133,12 +139,15 @@ final class AppModel {
 
     var store: JobStore { JobStore(root: outputRoot) }
 
-    /// A downloader that names files the way `job` does: its own format once it has one (so a retry
-    /// matches the files already there), otherwise the one from Settings.
+    /// A downloader that names files the way `job` does (so a retry matches the files already there).
+    /// Every new job is given the format from Settings before it starts, in `run`; a job without one
+    /// was saved before formats existed, and its files are in the standard `01 - Artist - Title`.
     func downloader(for job: Job) -> Downloader {
         var options = DownloadOptions()
         options.quality = audioQuality
-        options.fileNameFormat = job.fileNameFormat ?? fileNameFormat
+        // As many at once as this Mac's processor suits.
+        options.concurrency = DownloadOptions.recommendedConcurrency()
+        options.fileNameFormat = job.fileNameFormat ?? .standard
         let ffmpeg = FFmpeg(runner: runner, locator: locator)
         return Downloader(runner: runner, locator: locator, options: options) { url in
             // CPU-heavy, so keep it off the cooperative pool's main lanes.
@@ -220,29 +229,32 @@ final class AppModel {
     func startPasteListJob() {
         let tracks = readyTracks(draftTracks, in: .text)
         guard !tracks.isEmpty else { return }
-        guard run(Job(name: jobName(draftName, fallback: "Text"), kind: .pasteList, tracks: tracks)) != nil else { return }
+        guard start(tracks, in: draftTarget, orNew: Job(name: jobName(draftName, fallback: "Text"), kind: .pasteList, tracks: tracks)) else { return }
         draftText = ""
         draftTracks = []
         draftName = ""
+        draftTarget = nil
     }
 
     // MARK: Link
 
     private var linkLookupTask: Task<Void, Never>?
     /// What each pasted link turned out to contain, so editing the text does not look everything up again.
-    private var resolvedLinks: [String: [String]] = [:]
+    private var resolvedLinks: [String: ResolvedLink] = [:]
 
     /// Call when the pasted links change. Shortly after the typing stops, every link is looked up:
     /// playlists become their entries, Spotify becomes "Artist - Title". Lines that are not links are
     /// reported instead of being searched for; song names belong in the Text tab.
     func linkTextChanged() {
         linkLookupTask?.cancel()
+        linkLookupGeneration += 1
         let lines = linkText.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         guard !lines.isEmpty else {
             linkTracks = []
             linkFailures = []
+            linkPlaylistName = nil
             isResolvingLinks = false
             return
         }
@@ -256,57 +268,107 @@ final class AppModel {
         }
     }
 
+    /// Playlists still being read: the songs found so far, shown while the rest comes in.
+    private var partialLinks: [String: ResolvedLink] = [:]
+    /// Why links could not be read, in the lookup that is running or ran last.
+    private var linkLookupFailures: [String: String] = [:]
+    /// Goes up each time a lookup is replaced or stopped, so what a stopped one still reports is left out.
+    private var linkLookupGeneration = 0
+
     private func lookUp(_ lines: [String]) async {
         let resolver = LinkResolver(runner: runner, locator: locator)
-        var failures: [String: String] = [:]
+        let generation = linkLookupGeneration
         let checks = DraftValidation.problems(in: lines, context: .link)
+        partialLinks = [:]
+        linkLookupFailures = [:]
+        defer { if linkLookupGeneration == generation { partialLinks = [:] } }
         let links = zip(lines, checks).filter { $1 == nil }.map(\.0)
         var pending = Array(Set(links.filter { resolvedLinks[$0] == nil }))
         // A few at a time, so a long paste does not open dozens of connections at once.
         while !pending.isEmpty {
             let batch = Array(pending.prefix(4))
             pending.removeFirst(batch.count)
-            await withTaskGroup(of: (String, Result<[String], Error>).self) { group in
+            await withTaskGroup(of: (String, Result<ResolvedLink, Error>).self) { group in
                 for link in batch {
                     group.addTask {
-                        do { return (link, .success(try await resolver.resolve(link))) } catch { return (link, .failure(error)) }
+                        do {
+                            let found = try await resolver.lookUp(link) { partial in
+                                Task { @MainActor in
+                                    // Late news from a lookup that was replaced or has finished is ignored.
+                                    guard self.linkLookupGeneration == generation, self.resolvedLinks[link] == nil,
+                                          self.partialLinks[link].map({ Self.namedCount($0) <= Self.namedCount(partial) }) ?? true else { return }
+                                    self.partialLinks[link] = partial
+                                    self.showLinks(lines, checks: checks)
+                                }
+                            }
+                            return (link, .success(found))
+                        } catch {
+                            return (link, .failure(error))
+                        }
                     }
                 }
                 for await (link, result) in group {
+                    // A stopped lookup was cut short: it has half a playlist at best, which must not be
+                    // remembered as the whole of it, and its errors are those of being stopped.
+                    guard linkLookupGeneration == generation else { continue }
                     switch result {
-                    case let .success(queries): resolvedLinks[link] = queries
-                    case let .failure(error): failures[link] = message(for: error)
+                    case let .success(found):
+                        resolvedLinks[link] = found
+                        partialLinks[link] = nil
+                    case let .failure(error): linkLookupFailures[link] = message(for: error)
                     }
                 }
             }
             if Task.isCancelled { return }
+            showLinks(lines, checks: checks)
         }
+        showLinks(lines, checks: checks)
+    }
 
-        var queries: [String] = []
+    private static func namedCount(_ link: ResolvedLink) -> Int { link.entries.filter { $0.name != nil }.count }
+
+    /// Lists what is known so far about the pasted lines, in the order they were pasted.
+    private func showLinks(_ lines: [String], checks: [String?]) {
+        var entries: [LinkEntry] = []
+        var titles: [String] = []
         var problems: [String] = []
         for (line, check) in zip(lines, checks) {
             if let check {
                 problems.append("“\(line)”: \(check)")
-            } else if let resolved = resolvedLinks[line] {
-                queries += resolved
-            } else if let reason = failures[line] {
+            } else if let resolved = resolvedLinks[line] ?? partialLinks[line] {
+                entries += resolved.entries
+                if let title = resolved.title { titles.append(title) }
+            } else if let reason = linkLookupFailures[line] {
                 problems.append("“\(line)”: \(reason)")
             }
         }
-        linkTracks = queries.enumerated().map { i, q in Track(index: i + 1, query: q) }
+        // Rows already on screen keep their identity (and a name corrected by hand) as more come in.
+        // Each is handed out once: a song that is listed twice stays two rows, never one row shown twice.
+        var shown = Dictionary(grouping: linkTracks, by: \.query).mapValues { $0[...] }
+        linkTracks = entries.enumerated().map { i, entry in
+            var track = shown[entry.query]?.popFirst() ?? Track(index: i + 1, query: entry.query)
+            track.index = i + 1
+            if track.songName == nil { track.songName = entry.name }
+            return track
+        }
         linkFailures = problems
+        // One playlist on its own names the folder; a mix of links has no single name.
+        linkPlaylistName = titles.count == 1 && lines.count == 1 ? titles[0] : nil
     }
 
     func startLinkJob() {
         let tracks = readyTracks(linkTracks, in: .text)
         guard !tracks.isEmpty else { return }
-        guard run(Job(name: jobName(linkName, fallback: "Links"), kind: .link, tracks: tracks)) != nil else { return }
+        guard start(tracks, in: linkTarget, orNew: Job(name: linkPlaylistName.flatMap { linkName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0 : nil } ?? jobName(linkName, fallback: "Links"), kind: .link, tracks: tracks)) else { return }
         linkLookupTask?.cancel()
+        linkLookupGeneration += 1
         isResolvingLinks = false
         linkText = ""
         linkTracks = []
         linkFailures = []
         linkName = ""
+        linkPlaylistName = nil
+        linkTarget = nil
     }
 
     // MARK: YouTube Set
@@ -458,6 +520,45 @@ final class AppModel {
         return job
     }
 
+    /// Jobs that more songs can be added to. A mix is left out: its songs are tied to places in the mix.
+    var addableJobs: [Job] { jobs.filter { $0.kind != .youtubeSet } }
+
+    /// Downloads `tracks` into the job picked as `target`, or as `newJob` when none is picked (or it is gone).
+    private func start(_ tracks: [Track], in target: UUID?, orNew newJob: Job) -> Bool {
+        if let existing = target.flatMap(job(id:)), existing.kind != .youtubeSet {
+            return add(tracks, to: existing)
+        }
+        return run(newJob) != nil
+    }
+
+    /// Adds songs to a job that already exists and downloads them into its folder. Songs it already
+    /// has are left out. Returns false when nothing was started.
+    @discardableResult
+    func add(_ tracks: [Track], to job: Job) -> Bool {
+        guard !isRunning(job), let i = jobs.firstIndex(where: { $0.id == job.id }) else { return false }
+        let (updated, added) = jobs[i].appending(tracks: tracks)
+        guard added > 0 else {
+            errorMessage = tracks.count == 1 ? "“\(job.name)” already has this song." : "“\(job.name)” already has all of these songs."
+            return false
+        }
+        do {
+            try store.save(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+        jobs[i] = updated
+        selection = .job(job.id)
+        resume(updated)
+        return true
+    }
+
+    /// Opens the Link screen set up to add to `job`.
+    func addSongs(to job: Job) {
+        linkTarget = job.id
+        selection = .link
+    }
+
     /// Stops a running job. Tracks not yet finished are marked cancelled; finished files stay.
     func cancel(_ job: Job) {
         runningTasks[job.id]?.cancel()
@@ -515,6 +616,8 @@ final class AppModel {
                 finished.name = current.name
             }
             try? store.syncDirectory(&finished)
+            // Downloads finish in any order; date the files so Finder can show them in the list's order.
+            store.stampListOrder(of: finished)
             replace(finished)
             runningTasks[jobID] = nil
             isWorking = !runningTasks.isEmpty
@@ -572,6 +675,38 @@ final class AppModel {
             jobs[i] = updated
             errorMessage = "Could not rename every file: \(error.localizedDescription)"
         }
+    }
+
+    /// True when single songs of `job` can be renamed or deleted: nothing is running, and it is not a mix
+    /// still to be continued, whose list is made again from what Shazam heard and would undo the change.
+    func canEditTracks(of job: Job) -> Bool {
+        !isRunning(job) && !job.canResumeMix
+    }
+
+    /// Gives one song a new name and renames its file to match.
+    func rename(_ track: Track, in job: Job, to newName: String) {
+        guard let i = jobs.firstIndex(where: { $0.id == job.id }), canEditTracks(of: jobs[i]) else { return }
+        var updated = jobs[i]
+        do {
+            try store.renameTrack(track.id, in: &updated, to: newName)
+            store.stampListOrder(of: updated)
+            jobs[i] = updated
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Takes songs out of a job and moves their files to the Trash.
+    func delete(_ tracks: [Track], from job: Job) {
+        guard let i = jobs.firstIndex(where: { $0.id == job.id }), canEditTracks(of: jobs[i]) else { return }
+        var updated = jobs[i]
+        do {
+            for track in tracks { try store.deleteTrack(track.id, from: &updated) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        // Whatever was removed before an error is gone; show the job as it now is.
+        jobs[i] = updated
     }
 
     /// Moves a finished job's folder, downloads included, to the Trash and drops it from history.
