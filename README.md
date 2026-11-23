@@ -10,7 +10,7 @@ Every download is analysed on your Mac for tempo and key (shown as BPM and a Cam
 
 ## Status
 
-Early and usable, with no packaged release yet: you build it yourself. Known gaps:
+Early and usable. A signed, notarized build for macOS 14 or later is on the [Releases page](https://github.com/jeriel-rb/open-setlist/releases/latest) (`Setlist.dmg`); `NOTARIZE=1 scripts/make-dmg.sh` is how it is made. Known gaps:
 
 - Shazam usually names the original song even when the mix plays a remix. Matching the actual remix is not built yet.
 - BPM and key come from a simple on-device analysis. Expect occasional half- or double-tempo readings and relative-key mix-ups.

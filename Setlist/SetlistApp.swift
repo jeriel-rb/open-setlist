@@ -10,6 +10,9 @@ struct SetlistApp: App {
             ContentView()
                 .environment(model)
                 .environment(player)
+                #if DEBUG
+                .onAppear { WindowSnapshotter.shared.startIfAsked() }
+                #endif
         }
         .windowToolbarStyle(.unified)
         .commands { HelpCommands() }
